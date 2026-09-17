@@ -12,7 +12,11 @@ from unified.custom import Connections
 
 
 class Native:
+    def __init__(self):
+        self.requests = []
+
     async def request(self, method, path, body=b""):
+        self.requests.append((method, path))
         if path == "/admin/api/checkin":
             return 200, {"results": [{"uid": "trae-test", "ok": True, "message": "今日已签到"}]}
         return 200, {"accounts": [], "data": [{"id": "model"}]}
@@ -117,6 +121,19 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         result = response.json()
         self.assertEqual([item["provider"] for item in result["providers"]], ["trae", "codebuddy", "monkeycode"])
         self.assertEqual(result["summary"], {"total": 1, "succeeded": 1, "failed": 0})
+
+    async def test_per_account_trae_and_monkey_actions_require_csrf(self):
+        cases = [
+            ("/admin/api/unified/trae/accounts/test/checkin", "/admin/api/accounts/test/checkin"),
+            ("/admin/api/unified/trae/accounts/test/refresh", "/admin/api/accounts/test/refresh"),
+            ("/admin/api/unified/monkeycode/accounts/test/checkin", "/monkey/admin/accounts/test/checkin"),
+            ("/admin/api/unified/monkeycode/accounts/test/refresh", "/monkey/admin/accounts/test/refresh"),
+        ]
+        for path, upstream in cases:
+            self.assertEqual((await self.client.post(path)).status_code, 403)
+            response = await self.client.post(path, headers=self.csrf, json={})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn(("POST", upstream), self.native.requests)
 
     async def test_custom_first_chunk_and_disconnect_cleanup(self):
         await self.add()

@@ -277,6 +277,11 @@ def create_app(native=None, buddy=None):
         store.require_admin(req)
         return await trae("POST", "/admin/api/accounts/" + quote(aid, safe="") + "/refresh", {})
 
+    @app.post("/admin/api/unified/trae/accounts/{aid}/checkin")
+    async def checkin_trae(aid: str, req: Request):
+        store.require_admin(req)
+        return await trae("POST", "/admin/api/accounts/" + quote(aid, safe="") + "/checkin", {})
+
     @app.get("/admin/api/unified/trae/credits")
     async def credits(req: Request):
         store.require_admin(req)
@@ -368,6 +373,11 @@ def create_app(native=None, buddy=None):
     async def refresh_monkey(aid: str, req: Request):
         store.require_admin(req)
         return await monkey_request("POST", "/admin/accounts/" + quote(aid, safe="") + "/refresh")
+
+    @app.post("/admin/api/unified/monkeycode/accounts/{aid}/checkin")
+    async def checkin_monkey(aid: str, req: Request):
+        store.require_admin(req)
+        return await monkey_request("POST", "/admin/accounts/" + quote(aid, safe="") + "/checkin")
 
     @app.post("/admin/api/unified/connections/discover")
     async def discover_connections(req: Request):

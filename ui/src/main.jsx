@@ -256,7 +256,7 @@ function Overview({ data, onNavigate }) {
   </div>
 }
 
-function Accounts({ data, csrf, onRefresh, onAdd }) {
+function AccountsLegacy({ data, csrf, onRefresh, onAdd }) {
   const [query, setQuery] = useState('')
   const [provider, setProvider] = useState('all')
   const [checkingIn, setCheckingIn] = useState(false)
@@ -281,6 +281,115 @@ function Accounts({ data, csrf, onRefresh, onAdd }) {
     {checkinMessage && <div className="result-banner" role="status">{checkinMessage}</div>}
     <div className="toolbar"><div className="filter-tabs">{[['all','全部'],['trae','TRAE'],['codebuddy','CodeBuddy'],['monkeycode','MonkeyCode']].map(([id,label]) => <button key={id} className={provider === id ? 'active' : ''} onClick={() => setProvider(id)}>{label}</button>)}</div><label className="search-box"><Search size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索账号" /></label></div>
     <DataTable columns={['账号','平台','状态','额度','有效期','']} empty={!rows.length && '没有匹配的账号'}>{rows.map(a => { const status = a.enabled === false ? 'paused' : a.pool_state || a.status || 'ready'; return <tr key={`${a.provider}-${a.id}`}><td><strong>{a.name || a.nickname || a.uid}</strong><small>{a.uid || a.id}</small></td><td><span className="provider-badge">{providerName(a.provider)}</span></td><td><StatusBadge status={status}/></td><td className="tabular">{typeof a.remaining === 'number' ? a.remaining.toLocaleString() : '—'}</td><td><span className="muted">{a.expires_at ? new Date(a.expires_at).toLocaleDateString('zh-CN') : '未提供'}</span></td><td className="row-menu"><button aria-label="账号操作">•••</button></td></tr> })}</DataTable>
+  </section>
+}
+
+function accountEndpoint(account, suffix = '') {
+  const id = encodeURIComponent(account.id)
+  if (account.provider === 'codebuddy') return `accounts/${id}${suffix}`
+  return `unified/${account.provider}/accounts/${id}${suffix}`
+}
+
+function AccountRowActions({ account, csrf, onRefresh, onFeedback }) {
+  const [more, setMore] = useState(false)
+  const [busy, setBusy] = useState('')
+
+  async function run(action) {
+    setBusy(action)
+    try {
+      const suffix = account.provider === 'codebuddy' ? `/actions/${action}` : `/${action}`
+      const result = await request(accountEndpoint(account, suffix), { method: 'POST', body: {}, csrf })
+      onFeedback(account, result.message || (action === 'checkin' ? '签到完成' : '刷新完成'), false)
+      await onRefresh()
+    } catch (error) {
+      onFeedback(account, error.message, true)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function toggleEnabled() {
+    setBusy('toggle')
+    try {
+      await request(accountEndpoint(account), { method: 'PATCH', body: { enabled: account.enabled === false }, csrf })
+      onFeedback(account, account.enabled === false ? '账号已启用' : '账号已停用', false)
+      setMore(false)
+      await onRefresh()
+    } catch (error) {
+      onFeedback(account, error.message, true)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function remove() {
+    const label = account.name || account.nickname || account.uid
+    if (!window.confirm(`确定删除账号“${label}”吗？`)) return
+    setBusy('delete')
+    try {
+      await request(accountEndpoint(account), { method: 'DELETE', csrf })
+      onFeedback(account, '账号已删除', false)
+      await onRefresh()
+    } catch (error) {
+      onFeedback(account, error.message, true)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const disabled = Boolean(busy) || account.enabled === false
+  return <div className="account-actions">
+    <button className="mini-action" onClick={() => run('checkin')} disabled={disabled} title="签到并刷新额度"><Activity size={13}/><span>{busy === 'checkin' ? '签到中' : '签到'}</span></button>
+    <button className="mini-action" onClick={() => run('refresh')} disabled={disabled} title="刷新凭据和额度"><RefreshCw size={13} className={busy === 'refresh' ? 'spin' : ''}/><span>{busy === 'refresh' ? '刷新中' : '刷新'}</span></button>
+    <button className={`dots-action ${more ? 'active' : ''}`} onClick={() => setMore(value => !value)} aria-label="更多账号操作" aria-expanded={more}>•••</button>
+    {more && <span className="more-actions">
+      <button onClick={toggleEnabled} disabled={Boolean(busy)}>{account.enabled === false ? '启用' : '停用'}</button>
+      <button className="danger-text" onClick={remove} disabled={Boolean(busy)}>删除</button>
+    </span>}
+  </div>
+}
+
+function Accounts({ data, csrf, onRefresh, onAdd }) {
+  const [query, setQuery] = useState('')
+  const [provider, setProvider] = useState('all')
+  const [checkingIn, setCheckingIn] = useState(false)
+  const [feedback, setFeedback] = useState(null)
+  const rows = useMemo(() => (data?.accounts || []).filter(account =>
+    (provider === 'all' || account.provider === provider) &&
+    `${account.name || ''} ${account.nickname || ''} ${account.uid || ''}`.toLowerCase().includes(query.toLowerCase())
+  ), [data, provider, query])
+
+  function showFeedback(account, message, error) {
+    setFeedback({ key: `${account.provider}-${account.id}`, message, error })
+  }
+
+  async function checkinAll() {
+    setCheckingIn(true)
+    setFeedback(null)
+    try {
+      const result = await request('unified/checkin', { method: 'POST', body: {}, csrf })
+      const { total, succeeded, failed } = result.summary
+      setFeedback({ key: '', error: failed > 0, message: total ? `签到完成：成功或已签到 ${succeeded} 个，失败 ${failed} 个` : '没有需要签到的启用账号' })
+      await onRefresh()
+    } catch (error) {
+      setFeedback({ key: '', error: true, message: error.message })
+    } finally {
+      setCheckingIn(false)
+    }
+  }
+
+  return <section className="content-card">
+    <div className="section-head"><div><span className="section-label">账号池</span><h2>{data?.accounts?.length || 0} 个账号</h2></div><div className="head-actions"><button className="button secondary" onClick={checkinAll} disabled={checkingIn}><Activity size={15}/>{checkingIn ? '正在签到…' : '全部签到'}</button><button className="button primary" onClick={onAdd}><Plus size={15}/>添加账号</button></div></div>
+    {feedback && !feedback.key && <div className={`result-banner ${feedback.error ? 'error' : ''}`} role="status">{feedback.message}</div>}
+    <div className="toolbar"><div className="filter-tabs">{[['all','全部'],['trae','TRAE'],['codebuddy','CodeBuddy'],['monkeycode','MonkeyCode']].map(([id,label]) => <button key={id} className={provider === id ? 'active' : ''} onClick={() => setProvider(id)}>{label}</button>)}</div><label className="search-box"><Search size={15}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索账号" /></label></div>
+    <DataTable columns={['账号','平台','状态','额度','有效期','操作']} empty={!rows.length && '没有匹配的账号'}>{rows.map(account => {
+      const key = `${account.provider}-${account.id}`
+      const status = account.enabled === false ? 'paused' : account.pool_state || account.status || 'ready'
+      return <React.Fragment key={key}>
+        <tr><td><strong>{account.name || account.nickname || account.uid}</strong><small>{account.uid || account.id}</small></td><td><span className="provider-badge">{providerName(account.provider)}</span></td><td><StatusBadge status={status}/></td><td className="tabular">{typeof account.remaining === 'number' ? account.remaining.toLocaleString() : '—'}</td><td><span className="muted">{account.expires_at ? new Date(account.expires_at).toLocaleDateString('zh-CN') : '未提供'}</span></td><td className="row-menu"><AccountRowActions account={account} csrf={csrf} onRefresh={onRefresh} onFeedback={showFeedback}/></td></tr>
+        {feedback?.key === key && <tr className={`account-feedback ${feedback.error ? 'error' : ''}`}><td colSpan="6">{feedback.message}</td></tr>}
+      </React.Fragment>
+    })}</DataTable>
   </section>
 }
 
