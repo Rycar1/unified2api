@@ -1,0 +1,12 @@
+离线安装（Windows）
+
+1. 安装并启动 Docker Desktop（建议使用 Linux containers）。
+2. 将整个 unified2api-offline 文件夹解压到本地磁盘。
+3. 在此文件夹打开 PowerShell，执行 .\setup-offline.ps1。
+4. 打开 http://localhost:8080/admin/，使用 .env 中的 ADMIN_KEY 登录。
+
+这个包已经包含依赖镜像、源代码、.env 和当前账号数据，不需要联网拉取镜像或安装 Python/Go 依赖。首次启动可能需要几十秒。
+
+安全提示：.env 和 data/ 中包含访问密钥及登录凭据，只把压缩包交给可信的人。部署后建议立即在控制台撤销旧客户端密钥并创建新的密钥；如压缩包泄露，应立即重新登录账号并轮换密钥。
+
+停止服务请执行 docker compose down，不要执行 docker compose down -v，否则会删除账号数据。

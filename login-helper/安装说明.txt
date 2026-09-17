@@ -1,0 +1,19 @@
+Unified MonkeyCode 登录助手（Windows 10/11 x64）
+
+首次使用：
+1. 将压缩包解压。
+2. 双击 UnifiedLoginHelper.exe，出现“安装完成”即可。
+3. 回到统一控制台：添加账号 → MonkeyCode → 打开登录窗口。
+4. 浏览器首次询问是否打开助手时，选择允许。
+5. 在专用窗口完成官网登录，成功后窗口自动关闭，账号出现在控制台。
+
+无需安装 Python 或 Node，依赖已打包。需要已安装的 Microsoft Edge 或 Google Chrome。
+每次登录都使用全新临时浏览器会话，不读取你的日常浏览器资料。
+同一个账号重新登录会更新凭据；添加其他账号时重复以上步骤。
+助手仅在登录时运行，不安装后台服务；账号仍保存在统一后端的数据卷中。
+支持 localhost / 127.0.0.1 的 8080、8787、7864、18080 端口。
+登录有效期为 10 分钟；关闭登录窗口或控制台登录对话框即可取消。
+
+安装位置：%LOCALAPPDATA%\Unified2API\LoginHelper\UnifiedLoginHelper.exe
+协议注册位置：HKEY_CURRENT_USER\Software\Classes\unified2api-login
+卸载时删除上述注册表项与安装目录即可；不会删除后端已保存的账号。

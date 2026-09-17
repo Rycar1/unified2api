@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# 本地运行产物 / 日志
+*.log
+.DS_Store
+Thumbs.db
+
+# 个人 / 敏感信息（绝不提交）
+*.token
+*.key
+secrets.*
+.env
+.env.*
+!.env.example
+!.env.admin.example
+auth/
+management/
+backups/
+deploy/one-click/data/
+wheels/
+*.info
+*.tar.gz
+management-access.txt
+.idea/
+

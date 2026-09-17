@@ -1,0 +1,40 @@
+name: unified2api
+services:
+  gateway:
+    build: ./gateway
+    restart: unless-stopped
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      UNIFIED_API_KEY: ${UNIFIED_API_KEY:?Run setup.ps1 or create .env first}
+      TRAE_URL: http://trae:7864
+      CODEBUDDY_URL: http://codebuddy:8787
+    depends_on: [trae, codebuddy]
+  trae:
+    build: ./vendor/trae2api
+    restart: unless-stopped
+    ports: ["127.0.0.1:7864:7864", "127.0.0.1:18080:18080"]
+    environment:
+      TW2A_API_KEY: ${UNIFIED_API_KEY:?Set UNIFIED_API_KEY}
+      TW2A_LISTEN: :7864
+      TW2A_AUTH_DIR: /app/auths
+      TW2A_STATE_FILE: /app/data/state.json
+      TW2A_CALLBACK_PORT: "18080"
+      TZ: Asia/Shanghai
+    volumes: ["trae-auth:/app/auths", "trae-data:/app/data"]
+  codebuddy:
+    build:
+      context: .
+      dockerfile: codebuddy.Dockerfile
+    restart: unless-stopped
+    ports: ["127.0.0.1:8787:8787"]
+    environment:
+      ADMIN_KEY: ${ADMIN_KEY:?Set ADMIN_KEY}
+      CODEBUDDY2OPENAI_KEY: ${UNIFIED_API_KEY:?Set UNIFIED_API_KEY}
+      CODEBUDDY_AUTH_DIR: /data/auth
+      MANAGEMENT_DATA_DIR: /data/management
+      TZ: Asia/Shanghai
+    volumes: ["buddy-data:/data"]
+volumes:
+  trae-auth:
+  trae-data:
+  buddy-data:

@@ -1,0 +1,38 @@
+# Local secrets and account data
+.env
+.env.*
+!.env.example
+*.cookie
+*.credentials.json
+credentials.json
+accounts.json
+connections.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# JavaScript
+node_modules/
+ui/node_modules/
+npm-debug.log*
+pnpm-debug.log*
+
+# Local builds and IDE files
+*.exe
+*.spec
+build/
+dist/
+.playwright/
+.playwright-cli/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.log
+*.tmp
+*.bak

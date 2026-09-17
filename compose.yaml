@@ -1,0 +1,35 @@
+name: unified2api
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8787:8080"
+      - "127.0.0.1:7864:8080"
+      - "127.0.0.1:18080:8080"
+    environment:
+      UNIFIED_API_KEY: ${UNIFIED_API_KEY:?Run setup.ps1 first}
+      ADMIN_KEY: ${ADMIN_KEY:?Set ADMIN_KEY}
+      CODEBUDDY2OPENAI_KEY: ${UNIFIED_API_KEY:?Set UNIFIED_API_KEY}
+      CODEBUDDY_AUTH_DIR: /data/auth
+      MANAGEMENT_DATA_DIR: /data/management
+      TW2A_API_KEY: ${UNIFIED_API_KEY:?Set UNIFIED_API_KEY}
+      TW2A_AUTH_DIR: /app/auths
+      TW2A_STATE_FILE: /app/trae-data/state.json
+      TW2A_WORK_MODE: auto
+      SECURE_COOKIE: "false"
+      TZ: Asia/Shanghai
+    volumes:
+      - trae-auth:/app/auths
+      - trae-data:/app/trae-data
+      - buddy-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+volumes:
+  trae-auth:
+  trae-data:
+  buddy-data:

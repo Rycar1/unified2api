@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+.git
+gateway
+ui/node_modules
+**/__pycache__
+*.pyc
+*.exe
