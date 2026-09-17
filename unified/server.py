@@ -282,6 +282,45 @@ def create_app(native=None, buddy=None):
         store.require_admin(req)
         return await trae("GET", "/admin/api/credits")
 
+    @app.post("/admin/api/unified/checkin")
+    async def checkin_all(req: Request):
+        store.require_admin(req)
+        groups = []
+
+        try:
+            checkin = await trae("POST", "/admin/api/checkin", {})
+            groups.append({"provider": "trae", "results": checkin.get("results", [])})
+        except HTTPException:
+            groups.append({"provider": "trae", "results": [{"ok": False, "message": "TRAE 签到服务暂时不可用"}]})
+
+        try:
+            checkin = await pool.batch("checkin")
+            groups.append({"provider": "codebuddy", "results": checkin.get("results", [])})
+        except HTTPException:
+            groups.append({"provider": "codebuddy", "results": [{"ok": False, "message": "CodeBuddy 签到任务正在运行"}]})
+
+        monkey_results = []
+        code, monkey = await native.request("GET", "/monkey/admin/accounts")
+        if code == 200:
+            for account in monkey.get("accounts", []):
+                if account.get("disabled"):
+                    continue
+                try:
+                    item = await monkey_request("POST", "/admin/accounts/" + quote(account["uid"], safe="") + "/checkin")
+                    monkey_results.append(item)
+                except HTTPException as exc:
+                    monkey_results.append({"id": account.get("uid"), "ok": False, "message": str(exc.detail)})
+        else:
+            monkey_results.append({"ok": False, "message": "MonkeyCode 签到服务暂时不可用"})
+        groups.append({"provider": "monkeycode", "results": monkey_results})
+
+        all_results = [item for group in groups for item in group["results"]]
+        return {"providers": groups, "summary": {
+            "total": len(all_results),
+            "succeeded": sum(1 for item in all_results if item.get("ok")),
+            "failed": sum(1 for item in all_results if not item.get("ok")),
+        }}
+
     @app.post("/admin/api/unified/trae/login")
     async def login(req: Request):
         store.require_admin(req)

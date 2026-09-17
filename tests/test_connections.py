@@ -13,6 +13,8 @@ from unified.custom import Connections
 
 class Native:
     async def request(self, method, path, body=b""):
+        if path == "/admin/api/checkin":
+            return 200, {"results": [{"uid": "trae-test", "ok": True, "message": "今日已签到"}]}
         return 200, {"accounts": [], "data": [{"id": "model"}]}
 
     async def events(self, method, path, body=b""):
@@ -106,6 +108,15 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.native.last, ("/monkey/v1/chat/completions", {"model": "model", "messages": []}))
         response = await self.client.post("/v1/responses", headers=self.api_headers, json={"model": "monkeycode/model"})
         self.assertEqual(response.status_code, 400)
+
+    async def test_unified_checkin_requires_csrf_and_aggregates_platforms(self):
+        path = "/admin/api/unified/checkin"
+        self.assertEqual((await self.client.post(path)).status_code, 403)
+        response = await self.client.post(path, headers=self.csrf, json={})
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual([item["provider"] for item in result["providers"]], ["trae", "codebuddy", "monkeycode"])
+        self.assertEqual(result["summary"], {"total": 1, "succeeded": 1, "failed": 0})
 
     async def test_custom_first_chunk_and_disconnect_cleanup(self):
         await self.add()

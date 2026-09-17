@@ -177,6 +177,26 @@ func (s *service) account(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, map[string]bool{"ok": true})
 		return
 	}
+	if len(parts) == 2 && parts[1] == "checkin" && r.Method == "POST" {
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+		status, err := s.up.GetCheckinStatus(ctx, a)
+		if err != nil {
+			fail(w, 502, "签到状态查询失败；Cookie 过期时请重新登录")
+			return
+		}
+		message := "今日已签到"
+		if !status.CheckedIn {
+			if err := s.up.DoCheckin(ctx, a); err != nil {
+				fail(w, 502, "签到失败，请稍后重试")
+				return
+			}
+			message = "签到成功"
+		}
+		refreshed := s.refresh(ctx, a)
+		reply(w, 200, map[string]any{"ok": true, "id": a.UID, "message": message, "refreshed": refreshed})
+		return
+	}
 	if len(parts) != 1 {
 		fail(w, 404, "接口不存在")
 		return
