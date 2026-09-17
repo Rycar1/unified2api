@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import {
   Activity, Blocks, Bot, Check, ChevronDown, CircleGauge, Copy, Database, ExternalLink,
   FlaskConical, KeyRound, LogOut, Menu, Plus, RefreshCw,
-  Search, Server, Settings2, Users, X,
+  Search, Server, Settings2, Users, WalletCards, X,
 } from 'lucide-react'
 import './styles.css'
 
@@ -292,14 +293,36 @@ function accountEndpoint(account, suffix = '') {
 
 function AccountRowActions({ account, csrf, onRefresh, onFeedback }) {
   const [more, setMore] = useState(false)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
   const [busy, setBusy] = useState('')
+  const moreButton = useRef(null)
+  const menu = useRef(null)
+
+  useEffect(() => {
+    if (!more) return undefined
+    function close(event) {
+      if (!moreButton.current?.contains(event.target) && !menu.current?.contains(event.target)) setMore(false)
+    }
+    function closeForViewportChange() { setMore(false) }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('resize', closeForViewportChange)
+    window.addEventListener('scroll', closeForViewportChange, true)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('resize', closeForViewportChange)
+      window.removeEventListener('scroll', closeForViewportChange, true)
+    }
+  }, [more])
 
   async function run(action) {
     setBusy(action)
     try {
-      const suffix = account.provider === 'codebuddy' ? `/actions/${action}` : `/${action}`
+      const suffix = account.provider === 'codebuddy' ? `/actions/${action}` : `/${action === 'status' ? 'balance' : action}`
       const result = await request(accountEndpoint(account, suffix), { method: 'POST', body: {}, csrf })
-      onFeedback(account, result.message || (action === 'checkin' ? '签到完成' : '刷新完成'), false)
+      if (result.ok === false) throw new Error(result.message || '账号操作失败')
+      const balance = typeof result.remaining === 'number' ? `，当前余额 ${result.remaining.toLocaleString()}` : ''
+      const fallback = action === 'checkin' ? '签到完成' : action === 'status' ? '余额已更新' : '刷新完成'
+      onFeedback(account, (result.message || fallback) + balance, false)
       await onRefresh()
     } catch (error) {
       onFeedback(account, error.message, true)
@@ -337,15 +360,24 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback }) {
     }
   }
 
+  function toggleMore() {
+    if (!more && moreButton.current) {
+      const rect = moreButton.current.getBoundingClientRect()
+      setMenuPosition({ top: rect.bottom + 7, left: Math.max(10, rect.right - 126) })
+    }
+    setMore(value => !value)
+  }
+
   const disabled = Boolean(busy) || account.enabled === false
   return <div className="account-actions">
     <button className="mini-action" onClick={() => run('checkin')} disabled={disabled} title="签到并刷新额度"><Activity size={13}/><span>{busy === 'checkin' ? '签到中' : '签到'}</span></button>
     <button className="mini-action" onClick={() => run('refresh')} disabled={disabled} title="刷新凭据和额度"><RefreshCw size={13} className={busy === 'refresh' ? 'spin' : ''}/><span>{busy === 'refresh' ? '刷新中' : '刷新'}</span></button>
-    <button className={`dots-action ${more ? 'active' : ''}`} onClick={() => setMore(value => !value)} aria-label="更多账号操作" aria-expanded={more}>•••</button>
-    {more && <span className="more-actions">
-      <button onClick={toggleEnabled} disabled={Boolean(busy)}>{account.enabled === false ? '启用' : '停用'}</button>
-      <button className="danger-text" onClick={remove} disabled={Boolean(busy)}>删除</button>
-    </span>}
+    <button className="mini-action" onClick={() => run('status')} disabled={disabled} title="查询最新余额"><WalletCards size={13}/><span>{busy === 'status' ? '查询中' : '余额'}</span></button>
+    <button ref={moreButton} className={`dots-action ${more ? 'active' : ''}`} onClick={toggleMore} aria-label="更多账号操作" aria-expanded={more}>•••</button>
+    {more && createPortal(<div ref={menu} className="account-popover" style={menuPosition} role="menu">
+      <button role="menuitem" onClick={toggleEnabled} disabled={Boolean(busy)}>{account.enabled === false ? '启用账号' : '停用账号'}</button>
+      <button role="menuitem" className="danger-text" onClick={remove} disabled={Boolean(busy)}>删除账号</button>
+    </div>, document.body)}
   </div>
 }
 

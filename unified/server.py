@@ -282,6 +282,11 @@ def create_app(native=None, buddy=None):
         store.require_admin(req)
         return await trae("POST", "/admin/api/accounts/" + quote(aid, safe="") + "/checkin", {})
 
+    @app.post("/admin/api/unified/trae/accounts/{aid}/balance")
+    async def balance_trae(aid: str, req: Request):
+        store.require_admin(req)
+        return await trae("POST", "/admin/api/accounts/" + quote(aid, safe="") + "/balance", {})
+
     @app.get("/admin/api/unified/trae/credits")
     async def credits(req: Request):
         store.require_admin(req)
@@ -378,6 +383,17 @@ def create_app(native=None, buddy=None):
     async def checkin_monkey(aid: str, req: Request):
         store.require_admin(req)
         return await monkey_request("POST", "/admin/accounts/" + quote(aid, safe="") + "/checkin")
+
+    @app.post("/admin/api/unified/monkeycode/accounts/{aid}/balance")
+    async def balance_monkey(aid: str, req: Request):
+        store.require_admin(req)
+        await monkey_request("POST", "/admin/accounts/" + quote(aid, safe="") + "/refresh")
+        accounts = await monkey_request("GET", "/admin/accounts")
+        account = next((item for item in accounts.get("accounts", []) if item.get("uid") == aid), None)
+        if not account:
+            raise HTTPException(404, "账号不存在")
+        return {"id": aid, "ok": True, "message": "余额已更新", "remaining": account.get("balance", 0) / 1000,
+                "daily_tokens": account.get("daily_token_balance", 0)}
 
     @app.post("/admin/api/unified/connections/discover")
     async def discover_connections(req: Request):

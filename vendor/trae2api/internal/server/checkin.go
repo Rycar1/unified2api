@@ -84,3 +84,22 @@ func (h *Handler) adminCheckinAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, status, result)
 }
+
+func (h *Handler) adminAccountBalance(w http.ResponseWriter, r *http.Request) {
+	uid := r.PathValue("uid")
+	a := h.cfg.Pool.AuthByUID(uid)
+	if a == nil {
+		writeOpenAIError(w, http.StatusNotFound, "account_not_found", "账号不存在")
+		return
+	}
+	remaining, limit, used, packs, err := h.cfg.Upstream.EntUsage(a)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "balance_failed", "余额查询失败，请检查登录状态")
+		return
+	}
+	h.cfg.Pool.ReenableIfCredits(uid, remaining)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"uid": uid, "ok": true, "message": "余额已更新",
+		"remaining": remaining, "limit": limit, "used": used, "packs": packs,
+	})
+}

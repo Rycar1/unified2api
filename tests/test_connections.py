@@ -14,9 +14,15 @@ from unified.custom import Connections
 class Native:
     def __init__(self):
         self.requests = []
+        self.monkey_balance = False
 
     async def request(self, method, path, body=b""):
         self.requests.append((method, path))
+        if path == "/monkey/admin/accounts/test/refresh":
+            self.monkey_balance = True
+        if path == "/monkey/admin/accounts" and self.monkey_balance:
+            self.monkey_balance = False
+            return 200, {"accounts": [{"uid": "test", "balance": 12500, "daily_token_balance": 900}]}
         if path == "/admin/api/checkin":
             return 200, {"results": [{"uid": "trae-test", "ok": True, "message": "今日已签到"}]}
         return 200, {"accounts": [], "data": [{"id": "model"}]}
@@ -126,8 +132,10 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         cases = [
             ("/admin/api/unified/trae/accounts/test/checkin", "/admin/api/accounts/test/checkin"),
             ("/admin/api/unified/trae/accounts/test/refresh", "/admin/api/accounts/test/refresh"),
+            ("/admin/api/unified/trae/accounts/test/balance", "/admin/api/accounts/test/balance"),
             ("/admin/api/unified/monkeycode/accounts/test/checkin", "/monkey/admin/accounts/test/checkin"),
             ("/admin/api/unified/monkeycode/accounts/test/refresh", "/monkey/admin/accounts/test/refresh"),
+            ("/admin/api/unified/monkeycode/accounts/test/balance", "/monkey/admin/accounts/test/refresh"),
         ]
         for path, upstream in cases:
             self.assertEqual((await self.client.post(path)).status_code, 403)
