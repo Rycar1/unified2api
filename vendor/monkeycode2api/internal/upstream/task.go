@@ -2,9 +2,13 @@ package upstream
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
+	"strings"
 
 	"monkeycode2api/internal/cred"
 )
@@ -66,6 +70,13 @@ func (c *Client) resolveModelID(name string) string {
 // 上游会把 content 当作 agent 的需求。返回后即可通过 StreamTask
 // 挂到 /api/v1/users/tasks/stream 拉取流式正文。
 func (c *Client) CreateTask(ctx context.Context, a *cred.Account, content, modelID string, typ TaskType) (string, error) {
+	if c.Models != nil {
+		if id, ok := c.Models.ResolveForAccount(a.UID, modelID); ok {
+			modelID = id
+		} else if c.Models.HasAccount(a.UID) {
+			return "", &apiError{Kind: ErrNotFound, msg: "model is not available for this MonkeyCode account: " + modelID}
+		}
+	}
 	req := &CreateTaskRequest{
 		Content:  content,
 		CliName:  CliNameOpencode,
@@ -107,11 +118,9 @@ func (c *Client) CreateTask(ctx context.Context, a *cred.Account, content, model
 	return out.ID, nil
 }
 
-// Cluster round 事件数据（用于转成 OpenAI chunk 的正文/工具调用）。
-type streamChunk struct {
-	Text     string
-	ToolCall string
-	Done     bool
+// StopTask releases only the sandbox created by the current API request.
+func (c *Client) StopTask(ctx context.Context, a *cred.Account, taskID string) error {
+	return c.doJSON(ctx, a, http.MethodPut, EpTasksStop, map[string]string{"id": taskID}, nil)
 }
 
 // StreamTask 通过 WebSocket 拉取任务流，把 assistant 文本/工具事件推给 emit。
@@ -122,11 +131,18 @@ type streamChunk struct {
 //
 // 对话模式任务在无沙箱下更接近普通 LLM 对话，正文抽取最简单可靠。
 func (c *Client) StreamTask(ctx context.Context, a *cred.Account, taskID string, emit func(text string, done bool) error) error {
-	host := c.Base
-	u, _ := url.Parse(host + EpTasksStream)
+	u, err := url.Parse(strings.TrimRight(c.Base, "/") + EpTasksStream)
+	if err != nil {
+		return err
+	}
+	if u.Scheme == "https" {
+		u.Scheme = "wss"
+	} else if u.Scheme == "http" {
+		u.Scheme = "ws"
+	}
 	q := u.Query()
 	q.Set("id", taskID)
-	q.Set("mode", "develop") // 网页里 mode=develop
+	q.Set("mode", "attach") // Attach to the conversation started by CreateTask.
 	u.RawQuery = q.Encode()
 	wsURL := u.String()
 
@@ -135,6 +151,8 @@ func (c *Client) StreamTask(ctx context.Context, a *cred.Account, taskID string,
 		return err
 	}
 	defer ws.Close()
+	stopCancel := context.AfterFunc(ctx, func() { ws.conn.Close() })
+	defer stopCancel()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -142,27 +160,156 @@ func (c *Client) StreamTask(ctx context.Context, a *cred.Account, taskID string,
 		}
 		msgType, raw, err := ws.ReadMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("ws read: %w", err)
+		}
+		if msgType == wsCloseMessage {
+			code := uint16(0)
+			if len(raw) >= 2 {
+				code = binary.BigEndian.Uint16(raw[:2])
+			}
+			return fmt.Errorf("upstream websocket closed before task-ended (code=%d)", code)
 		}
 		if msgType != wsTextMessage {
 			continue
 		}
-		var ev map[string]any
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			continue
+		text, done, err := parseTaskEvent(raw)
+		if err != nil {
+			return err
 		}
-		typ, _ := ev["type"].(string)
-		switch typ {
-		case "done", "finish", "completed", "error", "abort":
-			return emit("", true)
-		case "round", "message", "assistant", "delta", "text", "content", "delta_text":
-			if s := extractText(raw); s != "" {
-				if err := emit(s, false); err != nil {
-					return err
+		if text != "" || done {
+			if err := emit(text, done); err != nil {
+				return err
+			}
+		}
+		if done {
+			return nil
+		}
+	}
+}
+
+// Current MonkeyCode task events contain base64-encoded ACP JSON in data.
+// Only agent_message_chunk is answer text; thoughts, user input and tools are
+// separate events and must never be echoed as the model's answer.
+func parseTaskEvent(raw []byte) (string, bool, error) {
+	var ev struct {
+		Type string          `json:"type"`
+		Kind string          `json:"kind"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return "", false, fmt.Errorf("invalid task event: %w", err)
+	}
+	switch ev.Type {
+	case "task-running":
+		if ev.Kind == "acp_ask_user_question" {
+			return "", false, fmt.Errorf("upstream task requires an interactive reply")
+		}
+		if ev.Kind != "acp_event" {
+			return "", false, nil
+		}
+		payload, err := decodeTaskData(ev.Data)
+		if err != nil {
+			return "", false, err
+		}
+		var event struct {
+			Update struct {
+				SessionUpdate string `json:"sessionUpdate"`
+				Content       struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"update"`
+		}
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return "", false, fmt.Errorf("invalid ACP event: %w", err)
+		}
+		if event.Update.SessionUpdate == "agent_message_chunk" && event.Update.Content.Type == "text" {
+			return event.Update.Content.Text, false, nil
+		}
+	case "task-error", "error", "abort":
+		payload, err := decodeTaskData(ev.Data)
+		if err != nil {
+			return "", false, err
+		}
+		message := taskEventError(payload)
+		if message == "" {
+			message = extractText(raw)
+		}
+		if message == "" {
+			message = ev.Type
+		}
+		return "", false, &apiError{Kind: ErrUpstream, msg: "upstream task error: " + message}
+	case "task-ended":
+		payload, err := decodeTaskData(ev.Data)
+		if err != nil {
+			return "", false, err
+		}
+		var ended struct {
+			ExitCode int    `json:"exit_code"`
+			Message  string `json:"message"`
+		}
+		if len(payload) > 0 {
+			if err := json.Unmarshal(payload, &ended); err != nil {
+				return "", false, fmt.Errorf("invalid task-ended event: %w", err)
+			}
+		}
+		if ended.ExitCode != 0 {
+			return "", false, fmt.Errorf("upstream task exited with code=%d: %s", ended.ExitCode, ended.Message)
+		}
+		return "", true, nil
+	case "done", "finish", "completed":
+		return "", true, nil
+	case "round", "message", "assistant", "delta", "text", "content", "delta_text":
+		return extractText(raw), false, nil
+	}
+	return "", false, nil
+}
+
+func decodeTaskData(data json.RawMessage) ([]byte, error) {
+	if len(data) == 0 || string(data) == "null" {
+		return nil, nil
+	}
+	if data[0] != '"' {
+		return data, nil
+	}
+	var encoded string
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return nil, err
+	}
+	if encoded == "" {
+		return nil, nil
+	}
+	if json.Valid([]byte(encoded)) {
+		return []byte(encoded), nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("invalid task event data encoding: %w", err)
+	}
+	return decoded, nil
+}
+
+func taskEventError(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var obj map[string]any
+	if json.Unmarshal(payload, &obj) == nil {
+		for _, key := range []string{"message", "error", "detail"} {
+			if value, ok := obj[key].(string); ok && value != "" {
+				return value
+			}
+			if value, ok := obj[key].(map[string]any); ok {
+				if message, ok := value["message"].(string); ok {
+					return message
 				}
 			}
 		}
 	}
+	return truncate(string(payload), 2048)
 }
 
 // extractText 从各种可能的正文事件负载中抽取字符串正文。

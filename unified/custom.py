@@ -10,6 +10,16 @@ import httpx
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from admin.server import write_json
+from unified.errors import safe_error_message
+
+
+async def _bounded_body(response, limit=64 * 1024):
+    content = bytearray()
+    async for chunk in response.aiter_bytes():
+        content.extend(chunk[:limit - len(content)])
+        if len(content) >= limit:
+            break
+    return content.decode("utf-8", errors="replace")
 
 
 class Connections:
@@ -95,14 +105,23 @@ class Connections:
         row = self.validate(body, old)
         try:
             async with self.client() as client:
-                response = await client.get(row["base_url"] + "/models", headers={"Authorization": "Bearer " + row["key"]}, timeout=30)
-                if response.status_code != 200:
-                    raise HTTPException(502, f"模型列表读取失败（上游 HTTP {response.status_code}），可手动填写模型名")
-                data = response.json()
+                async with client.stream("GET", row["base_url"] + "/models", headers={"Authorization": "Bearer " + row["key"]}, timeout=30) as response:
+                    if response.status_code != 200:
+                        detail = await _bounded_body(response)
+                        raise HTTPException(502, "模型列表读取失败：" + safe_error_message(detail, response.status_code, (row["key"],)))
+                    raw = await _bounded_body(response, 1024 * 1024)
+                    try:
+                        data = json.loads(raw)
+                        if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                            raise ValueError("missing model list")
+                    except (ValueError, TypeError):
+                        raise HTTPException(502, "模型列表响应格式无效：" + safe_error_message(raw, response.status_code, (row["key"],))) from None
                 models = [m["id"] for m in data["data"] if isinstance(m, dict) and isinstance(m.get("id"), str)]
                 row["models"] = models
                 return {"models": self.validate(row)["models"]}
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, "模型列表读取失败：" + safe_error_message(str(exc) or type(exc).__name__, 502, (row["key"],))) from None
+        except (ValueError, KeyError, TypeError):
             raise HTTPException(502, "无法读取模型列表，请检查地址和 Key，或手动填写模型名")
 
     def models(self):
@@ -121,8 +140,9 @@ class Connections:
                 async with client.stream("POST", row["base_url"] + path.removeprefix("/v1"), content=body,
                         headers={"Authorization": "Bearer " + row["key"], "Content-Type": "application/json"}) as response:
                     if response.status_code >= 300:
+                        detail = await _bounded_body(response)
                         raise HTTPException(response.status_code if response.status_code >= 400 else 502,
-                                            f"自定义服务返回 HTTP {response.status_code}，请检查配置、模型权限及额度")
+                                            safe_error_message(detail, response.status_code, (row["key"],)))
                     content_type = response.headers.get("content-type", "application/json")
                     async def chunks():
                         if "text/event-stream" in content_type and path == "/v1/chat/completions":
@@ -145,7 +165,7 @@ class Connections:
                     started = True
                     await StreamingResponse(chunks(), status_code=response.status_code,
                         headers={"Content-Type": content_type, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})(scope, receive, send)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             if started:
                 raise  # Abort a broken stream; never append a second HTTP response.
-            raise HTTPException(502, "无法连接自定义服务，请检查 Base URL 和网络")
+            raise HTTPException(502, "无法连接自定义服务：" + safe_error_message(str(exc) or type(exc).__name__, 502, (row["key"],))) from None

@@ -1,4 +1,4 @@
-﻿package scheduler
+package scheduler
 
 import (
 	"encoding/json"
@@ -116,6 +116,9 @@ func TestRunCheckinReenablesCoolingAccount(t *testing.T) {
 	}
 	if st.Credits != 500 {
 		t.Errorf("credits=%d want 500", st.Credits)
+	}
+	if st.Remaining == nil || *st.Remaining != 500 {
+		t.Errorf("scheduled balance not exposed: %+v", st)
 	}
 }
 

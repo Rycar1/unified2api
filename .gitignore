@@ -12,6 +12,7 @@ connections.json
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.go-cache/
 .coverage
 
 # JavaScript

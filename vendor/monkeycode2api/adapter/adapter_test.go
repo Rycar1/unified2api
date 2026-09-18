@@ -4,6 +4,7 @@ import (
 	"io"
 	"monkeycode2api/internal/cred"
 	"monkeycode2api/internal/pool"
+	apis "monkeycode2api/internal/server"
 	"monkeycode2api/internal/upstream"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,11 @@ func TestAccountLifecycle(t *testing.T) {
 	call("POST", "/admin/accounts", `{"cookie":"session=secret","name":"first"}`)
 	if len(s.p.Accounts()) != 1 || s.p.List()[0].DailyTokenBal != 500 {
 		t.Fatal("account not loaded")
+	}
+	models := httptest.NewRecorder()
+	apis.NewHandler(apis.Config{Pool: s.p, Upstream: s.up, Models: s.up.Models}).ServeHTTP(models, httptest.NewRequest("GET", "/v1/models", nil))
+	if !strings.Contains(models.Body.String(), `"id":"test-model"`) || strings.Contains(models.Body.String(), `"id":"uuid"`) {
+		t.Fatalf("public models must expose names instead of internal UUIDs: %s", models.Body.String())
 	}
 	if strings.Contains(call("GET", "/admin/accounts", "").Body.String(), "secret") {
 		t.Fatal("credential leaked")

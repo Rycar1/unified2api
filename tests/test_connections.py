@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 import httpx
 from admin.server import create_app as create_buddy
@@ -15,14 +16,26 @@ class Native:
     def __init__(self):
         self.requests = []
         self.monkey_balance = False
+        self.trae_remaining = None
+        self.next_trae_balance = 2000
+        self.monkey_remaining = 12500
+        self.balance_error = False
 
     async def request(self, method, path, body=b""):
         self.requests.append((method, path))
+        if path == "/admin/api/accounts":
+            return 200, {"accounts": [{"uid": "test", "nickname": "Test", "enabled": True, "disabled": False, "cooling": False, "expires_at": 0, "remaining": self.trae_remaining}]}
+        if path == "/admin/api/accounts/test/balance":
+            if self.balance_error:
+                return 502, {"error": {"message": "balance query failed"}}
+            self.trae_remaining = self.next_trae_balance
+            return 200, {"uid": "test", "ok": True, "message": "updated", "remaining": self.trae_remaining}
         if path == "/monkey/admin/accounts/test/refresh":
+            if self.balance_error:
+                return 502, {"detail": "balance query failed"}
             self.monkey_balance = True
         if path == "/monkey/admin/accounts" and self.monkey_balance:
-            self.monkey_balance = False
-            return 200, {"accounts": [{"uid": "test", "balance": 12500, "daily_token_balance": 900}]}
+            return 200, {"accounts": [{"uid": "test", "balance": self.monkey_remaining, "daily_token_balance": 900, "disabled": False, "cooling": False}]}
         if path == "/admin/api/checkin":
             return 200, {"results": [{"uid": "trae-test", "ok": True, "message": "今日已签到"}]}
         return 200, {"accounts": [], "data": [{"id": "model"}]}
@@ -40,6 +53,7 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         buddy = create_buddy(root=self.temp.name+"/management", auth_dir=self.temp.name+"/auth",
                              initial_key="client-key", admin_key="long-admin-key-for-tests", secure_cookie=False)
         self.app = create_app(native=self.native, buddy=buddy)
+        self.buddy = buddy
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://test")
         login = await self.client.post("/admin/api/login", json={"key": "long-admin-key-for-tests"})
         self.csrf = {"X-CSRF-Token": login.json()["csrf"]}
@@ -142,6 +156,91 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post(path, headers=self.csrf, json={})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertIn(("POST", upstream), self.native.requests)
+
+        balance = await self.client.post("/admin/api/unified/accounts/trae/test/balance", headers=self.csrf, json={})
+        self.assertEqual(balance.json()["remaining"], 2000)
+        overview = await self.client.get("/admin/api/unified/overview")
+        trae = next(item for item in overview.json()["accounts"] if item["provider"] == "trae")
+        self.assertEqual(trae["remaining"], 2000)
+
+    async def test_balance_reads_latest_provider_snapshot_including_zero(self):
+        overview_path = "/admin/api/unified/overview"
+        async def row(provider):
+            overview = (await self.client.get(overview_path)).json()
+            return next(item for item in overview["accounts"] if item["provider"] == provider)
+        self.assertIsNone((await row("trae"))["remaining"])
+        for provider in ("trae", "monkeycode"):
+            path = f"/admin/api/unified/accounts/{provider}/test/balance"
+            before = len(self.native.requests)
+            self.assertEqual((await self.client.post(path)).status_code, 403)
+            self.assertEqual(len(self.native.requests), before)
+            response = await self.client.post(path, headers=self.csrf, json={})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual((await row(provider))["remaining"], response.json()["remaining"])
+        # A later provider refresh must supersede a previously queried value.
+        self.native.trae_remaining = 125
+        self.native.monkey_remaining = 12000
+        self.assertEqual((await row("trae"))["remaining"], 125)
+        self.assertEqual((await row("monkeycode"))["remaining"], 12)
+        self.native.next_trae_balance = self.native.monkey_remaining = 0
+        for provider in ("trae", "monkeycode"):
+            response = await self.client.post(f"/admin/api/unified/accounts/{provider}/test/balance", headers=self.csrf, json={})
+            self.assertEqual(response.json()["remaining"], 0)
+            self.assertEqual((await row(provider))["remaining"], 0)
+        self.native.balance_error = True
+        for provider in ("trae", "monkeycode"):
+            response = await self.client.post(f"/admin/api/unified/accounts/{provider}/test/balance", headers=self.csrf, json={})
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual((await row(provider))["remaining"], 0)
+
+    async def test_codebuddy_balance_refresh_and_failed_query_preserve_snapshot(self):
+        credential = {"account": {"uid": "buddy-test", "nickname": "Test", "enterpriseId": "test"},
+                      "auth": {"accessToken": "fake-access", "refreshToken": "fake-refresh", "expiresAt": 2000000000000}}
+        created = await self.client.post("/admin/api/accounts", headers=self.csrf, json={"credential": credential})
+        aid = created.json()["id"]
+        store, pool = self.buddy.state.store, self.buddy.state.pool
+        store.manager_for(aid, store.data["accounts"][aid]).get_headers = Mock(return_value={"X-Domain": "www.codebuddy.cn"})
+        state = {"balance": "12.34", "fail": False}
+        def upstream(req):
+            if state["fail"]:
+                return httpx.Response(500)
+            if req.url.path.endswith("checkin-activity-status"):
+                return httpx.Response(200, json={"code": 0, "data": {"active": True, "today_checked_in": True}})
+            return httpx.Response(200, json={"code": 0, "data": {"Response": {"Data": {"TotalCount": 1, "Accounts": [
+                {"CycleCapacityRemainPrecise": state["balance"], "CycleCapacitySize": 500}
+            ]}}}})
+        pool.client_factory = lambda: httpx.Client(transport=httpx.MockTransport(upstream))
+        path = f"/admin/api/unified/accounts/codebuddy/{aid}/balance"
+        self.assertEqual((await self.client.post(path)).status_code, 403)
+        for value in ("12.34", "0"):
+            state["balance"] = value
+            response = await self.client.post(path, headers=self.csrf, json={})
+            self.assertTrue(response.json()["ok"], response.text)
+            overview = (await self.client.get("/admin/api/unified/overview")).json()
+            account = next(item for item in overview["accounts"] if item["provider"] == "codebuddy")
+            self.assertEqual(account["remaining"], float(value))
+        state["fail"] = True
+        self.assertFalse((await self.client.post(path, headers=self.csrf, json={})).json()["ok"])
+        self.assertEqual(pool.rows(store.account_rows())[0]["remaining"], 0)
+
+    async def test_test_endpoint_returns_upstream_diagnostics_and_cleans_test_key(self):
+        await self.add()
+        cases = [
+            (httpx.Response(403, json={"detail": {"error": {"message": "model access denied", "code": "permission_denied"}}}), "model access denied"),
+            (httpx.Response(502, text="gateway timeout: backend unavailable"), "backend unavailable"),
+            (httpx.Response(401, text="invalid key: private-upstream-key"), "invalid key"),
+            (httpx.Response(200, json={"error": {"message": "invalid credentials private-upstream-key"}}), "invalid credentials"),
+        ]
+        for upstream, expected in cases:
+            self.app.state.connections.transport = httpx.MockTransport(lambda req: upstream)
+            response = await self.client.post("/admin/api/unified/test", headers=self.csrf, json={"model": "myapi/org/model", "message": "hello"})
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()
+            self.assertFalse(data["ok"])
+            self.assertIn(expected, data["error"])
+            self.assertIn(str(upstream.status_code), data["error"])
+            self.assertNotIn("private-upstream-key", data["error"])
+            self.assertFalse(self.buddy.state.store.test_keys)
 
     async def test_custom_first_chunk_and_disconnect_cleanup(self):
         await self.add()

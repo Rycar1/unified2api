@@ -84,13 +84,20 @@ func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 	var data []map[string]any
 	if h.cfg.Models != nil {
 		for _, m := range h.cfg.Models.List() {
+			name := strings.TrimSpace(m.Name)
+			if name == "" {
+				continue
+			}
 			data = append(data, map[string]any{
-				"id":            m.ID,
+				// The public model ID is the stable human-readable name. The
+				// catalog resolves it back to MonkeyCode's internal UUID when a
+				// task is created.
+				"id":            name,
 				"object":        "model",
 				"created":       1753600000,
 				"owned_by":      "monkeycode",
 				"tier":          firstNonEmpty(m.Tier, m.AccessLevel, "basic"),
-				"name":          m.Name,
+				"name":          name,
 				"input_price":   m.InputPrice,
 				"support_image": m.SupportImage,
 				"access_level":  m.AccessLevel,
@@ -153,6 +160,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		tried[acct.UID] = true
+		if h.cfg.Models != nil && h.cfg.Models.HasAccount(acct.UID) {
+			if _, ok := h.cfg.Models.ResolveForAccount(acct.UID, req.Model); !ok {
+				lastErr = &upstream.ChatError{Kind: upstream.ErrNotFound, Msg: "model is not available for the enabled MonkeyCode accounts: " + req.Model}
+				continue
+			}
+		}
 
 		content := upstream.BuildContent(req.Messages)
 		cs, err := h.cfg.Upstream.Chat(r.Context(), acct, req.Model, content, upstream.TaskTypeDevelop)
@@ -179,6 +192,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Stream {
+			defer cs.Close()
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Connection", "keep-alive")
@@ -216,7 +230,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	msg := "all accounts unavailable (cooling/disabled)"
 	if lastErr != nil {
-		msg += ": " + lastErr.Error()
+		msg = lastErr.Error()
+		if kind, _ := upstream.Classify(lastErr); kind == upstream.ErrBusy {
+			writeOpenAIError(w, http.StatusConflict, "account_busy", msg)
+			return
+		} else if kind == upstream.ErrNotFound {
+			writeOpenAIError(w, http.StatusBadRequest, "model_not_available", msg)
+			return
+		}
 	}
 	writeOpenAIError(w, http.StatusServiceUnavailable, "no_healthy_account", msg)
 }
@@ -239,8 +260,7 @@ func streamAsOpenAI(w http.ResponseWriter, cs *upstream.ChunkStream, model strin
 		text, done, err := cs.Next()
 		if err != nil {
 			writeSSE(w, map[string]any{
-				"id": "chatcmpl-monkeycode", "object": "chat.completion.chunk", "model": model,
-				"choices": []any{map[string]any{"delta": map[string]any{}, "finish_reason": "stop"}},
+				"error": map[string]any{"message": err.Error(), "type": "api_error", "code": "upstream_stream"},
 			})
 			flush()
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))

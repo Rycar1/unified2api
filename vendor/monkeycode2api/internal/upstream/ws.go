@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"monkeycode2api/internal/cred"
@@ -31,34 +33,54 @@ const (
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 type wsConn struct {
-	conn net.Conn
-	r    *bufio.Reader
+	conn    net.Conn
+	r       *bufio.Reader
+	writeMu sync.Mutex
 }
 
 func (w *wsConn) ReadMessage() (int, []byte, error) {
+	var message []byte
+	var messageType byte
 	for {
-		opcode, payload, err := w.readFrame()
+		opcode, payload, final, err := w.readFrame()
 		if err != nil {
 			return 0, nil, err
 		}
 		switch opcode {
 		case wsTextMessage, wsBinaryMessage:
-			return int(opcode), payload, nil
+			if messageType != 0 {
+				return 0, nil, errors.New("ws unexpected data frame")
+			}
+			messageType = opcode
+			message = payload
+		case 0:
+			if messageType == 0 {
+				return 0, nil, errors.New("ws unexpected continuation")
+			}
+			message = append(message, payload...)
 		case wsPingMessage:
-			_ = w.writePong(payload)
+			if err := w.writePong(payload); err != nil {
+				return 0, nil, err
+			}
 			continue
 		case wsCloseMessage:
 			return int(wsCloseMessage), payload, nil
 		default:
 			continue
 		}
+		if len(message) > 16<<20 {
+			return 0, nil, errors.New("ws message too large")
+		}
+		if final {
+			return int(messageType), message, nil
+		}
 	}
 }
 
-func (w *wsConn) readFrame() (byte, []byte, error) {
+func (w *wsConn) readFrame() (byte, []byte, bool, error) {
 	two := make([]byte, 2)
 	if _, err := io.ReadFull(w.r, two); err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	h1, h2 := two[0], two[1]
 	opcode := h1 & 0x0f
@@ -68,35 +90,35 @@ func (w *wsConn) readFrame() (byte, []byte, error) {
 	case 126:
 		var b [2]byte
 		if _, err := io.ReadFull(w.r, b[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, false, err
 		}
 		length = uint64(binary.BigEndian.Uint16(b[:]))
 	case 127:
 		var b [8]byte
 		if _, err := io.ReadFull(w.r, b[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, false, err
 		}
 		length = binary.BigEndian.Uint64(b[:])
 	}
 	var maskKey [4]byte
 	if masked {
 		if _, err := io.ReadFull(w.r, maskKey[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, false, err
 		}
 	}
 	if length > 16<<20 {
-		return 0, nil, errors.New("ws frame too large")
+		return 0, nil, false, errors.New("ws frame too large")
 	}
 	payload := make([]byte, length)
 	if _, err := io.ReadFull(w.r, payload); err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	if masked {
 		for i := range payload {
 			payload[i] ^= maskKey[i&3]
 		}
 	}
-	return opcode, payload, nil
+	return opcode, payload, h1&0x80 != 0, nil
 }
 
 func (w *wsConn) writePong(payload []byte) error {
@@ -104,16 +126,28 @@ func (w *wsConn) writePong(payload []byte) error {
 }
 
 func (w *wsConn) writeFrame(opcode byte, payload []byte) error {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+	_ = w.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	var head []byte
 	if len(payload) <= 125 {
-		head = []byte{0x80 | opcode, byte(len(payload))}
+		head = []byte{0x80 | opcode, 0x80 | byte(len(payload))}
 	} else {
-		head = []byte{0x80 | opcode, 126, byte(len(payload) >> 8), byte(len(payload))}
+		head = []byte{0x80 | opcode, 0x80 | 126, byte(len(payload) >> 8), byte(len(payload))}
+	}
+	var mask [4]byte
+	if _, err := rand.Read(mask[:]); err != nil {
+		return err
+	}
+	head = append(head, mask[:]...)
+	masked := make([]byte, len(payload))
+	for i := range payload {
+		masked[i] = payload[i] ^ mask[i&3]
 	}
 	if _, err := w.conn.Write(head); err != nil {
 		return err
 	}
-	_, err := w.conn.Write(payload)
+	_, err := w.conn.Write(masked)
 	return err
 }
 
@@ -128,6 +162,9 @@ func (c *Client) dialWS(ctx context.Context, a *cred.Account, wsURL string) (*ws
 	u, err := url.Parse(wsURL)
 	if err != nil {
 		return nil, err
+	}
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return nil, errors.New("invalid websocket URL scheme")
 	}
 	useTLS := u.Scheme == "wss"
 	host, port := u.Hostname(), u.Port()
@@ -148,7 +185,8 @@ func (c *Client) dialWS(ctx context.Context, a *cred.Account, wsURL string) (*ws
 		return nil, err
 	}
 	if useTLS {
-		tconn, terr := tls.DialWithDialer(&d, "tcp", addr, &tls.Config{ServerName: host})
+		tlsDialer := tls.Dialer{NetDialer: &d, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}}
+		tconn, terr := tlsDialer.DialContext(ctxDial, "tcp", addr)
 		conn, err = tconn, terr
 	} else {
 		conn, err = d.DialContext(ctxDial, "tcp", addr)
@@ -158,6 +196,8 @@ func (c *Client) dialWS(ctx context.Context, a *cred.Account, wsURL string) (*ws
 	}
 	// 握手整体受 ctx 超时约束（普通路径/ TLS 握手都适用）
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	stopCancel := context.AfterFunc(ctxDial, func() { conn.Close() })
+	defer stopCancel()
 
 	key, err := randomWSKey()
 	if err != nil {
@@ -173,14 +213,17 @@ func (c *Client) dialWS(ctx context.Context, a *cred.Account, wsURL string) (*ws
 			"Connection":            {"Upgrade"},
 			"Sec-WebSocket-Key":     {key},
 			"Sec-WebSocket-Version": {"13"},
+			"Origin":                {c.Base},
 		},
 	}
 	if a.CookieHeader() != "" {
 		httpReq.Header.Set("Cookie", a.CookieHeader())
 	}
-	if ua := a.Session.UserAgent; ua != "" {
-		httpReq.Header.Set("User-Agent", ua)
+	ua := a.Session.UserAgent
+	if ua == "" {
+		ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 	}
+	httpReq.Header.Set("User-Agent", ua)
 	if err := httpReq.Write(conn); err != nil {
 		conn.Close()
 		return nil, err
@@ -192,10 +235,11 @@ func (c *Client) dialWS(ctx context.Context, a *cred.Account, wsURL string) (*ws
 		conn.Close()
 		return nil, err
 	}
-	_ = httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 2048))
+		_ = httpResp.Body.Close()
 		conn.Close()
-		return nil, fmt.Errorf("ws handshake failed: %d", httpResp.StatusCode)
+		return nil, fmt.Errorf("ws handshake failed: HTTP %d %s", httpResp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	expect := wsAccept(key)
 	if got := httpResp.Header.Get("Sec-WebSocket-Accept"); got != expect {

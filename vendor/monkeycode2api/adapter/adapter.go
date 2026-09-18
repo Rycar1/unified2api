@@ -207,6 +207,7 @@ func (s *service) account(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.p.Remove(a.UID)
+		s.up.Models.RemoveAccount(a.UID)
 	} else if r.Method == "PATCH" {
 		var body struct {
 			Name    *string `json:"name"`

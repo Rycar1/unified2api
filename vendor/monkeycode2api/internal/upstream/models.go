@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 
 	"monkeycode2api/internal/cred"
@@ -16,13 +17,14 @@ import (
 //
 // 用任意一个账号即可拉取（它们是该账号的可用模型）。
 type ModelCatalog struct {
-	mu     sync.RWMutex
-	models []*Model       // 当前全部（含隐藏）
-	by     map[string]int // 可见模型 name → 在 models 中的下标
+	mu       sync.RWMutex
+	models   []*Model       // 当前全部（含隐藏）
+	by       map[string]int // 可见模型 name → 在 models 中的下标
+	accounts map[string][]*Model
 }
 
 func NewModelCatalog() *ModelCatalog {
-	return &ModelCatalog{by: make(map[string]int)}
+	return &ModelCatalog{by: make(map[string]int), accounts: make(map[string][]*Model)}
 }
 
 // Refresh 用账号拉取一次模型目录并重建索引；失败返回错误但不破坏旧目录。
@@ -32,23 +34,70 @@ func (c *ModelCatalog) Refresh(ctx context.Context, cli *Client, acct *cred.Acco
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.accounts[acct.UID] = models
+	c.rebuild()
+	return nil
+}
+
+func (c *ModelCatalog) rebuild() {
+	var models []*Model
+	for _, accountModels := range c.accounts {
+		models = append(models, accountModels...)
+	}
 	by := map[string]int{}
 	sort.SliceStable(models, func(i, j int) bool {
 		return pickBest(models[i], models[j])
 	})
 	for i, m := range models {
-		if m.IsHidden {
+		if m == nil || m.IsHidden || m.ID == "" || strings.TrimSpace(m.Name) == "" {
 			continue
 		}
-		if _, ok := by[m.Name]; !ok {
-			by[m.Name] = i
+		name := strings.TrimSpace(m.Name)
+		if _, ok := by[name]; !ok {
+			by[name] = i
 		}
 	}
-	c.mu.Lock()
 	c.models = models
 	c.by = by
-	c.mu.Unlock()
-	return nil
+}
+
+func (c *ModelCatalog) RemoveAccount(uid string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.accounts, uid)
+	c.rebuild()
+}
+
+func (c *ModelCatalog) HasAccount(uid string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, ok := c.accounts[uid]
+	return ok
+}
+
+// Each account can have different custom models/permissions. Resolve against
+// its own catalog, so another account's refresh cannot replace its model UUID.
+func (c *ModelCatalog) ResolveForAccount(uid, name string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var best *Model
+	for _, m := range c.accounts[uid] {
+		if m == nil || m.IsHidden || m.ID == "" {
+			continue
+		}
+		if m.ID == name {
+			return m.ID, true
+		} // Existing clients may use UUIDs.
+		if strings.TrimSpace(m.Name) == strings.TrimSpace(name) && (best == nil || pickBest(m, best)) {
+			best = m
+		}
+	}
+	if best != nil {
+		return best.ID, true
+	}
+	return name, false
 }
 
 // Resolve 把用户请求的模型名解析成平台模型 UUID；未命中返回原样。
@@ -66,11 +115,10 @@ func (c *ModelCatalog) List() []*Model {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	var out []*Model
-	for _, m := range c.models {
-		if m.IsHidden {
-			continue
-		}
+	for _, i := range c.by {
+		m := c.models[i]
 		cp := *m
+		cp.Name = strings.TrimSpace(cp.Name)
 		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -86,6 +134,9 @@ func (c *ModelCatalog) Len() int {
 
 // pickBest 稳定排序比较器：可见优先，其次 basic 档。
 func pickBest(a, b *Model) bool {
+	if a == nil || b == nil {
+		return a != nil
+	}
 	if a.IsHidden != b.IsHidden {
 		return !a.IsHidden
 	}

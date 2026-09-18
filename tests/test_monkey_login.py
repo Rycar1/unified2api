@@ -12,6 +12,11 @@ class MonkeyLoginTest(test_connections.ConnectionsTest):
     test_discovery_routing_headers_and_disable = None
     test_monkey_routing_and_protocol_rejection = None
     test_stream_reasoning_and_upstream_errors = None
+    test_unified_checkin_requires_csrf_and_aggregates_platforms = None
+    test_per_account_trae_and_monkey_actions_require_csrf = None
+    test_balance_reads_latest_provider_snapshot_including_zero = None
+    test_codebuddy_balance_refresh_and_failed_query_preserve_snapshot = None
+    test_test_endpoint_returns_upstream_diagnostics_and_cleans_test_key = None
 
     async def start_flow(self):
         response = await self.client.post('/admin/api/unified/monkeycode/login', headers=self.csrf, json={'name':'web account'})

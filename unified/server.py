@@ -18,6 +18,7 @@ from core import converter
 from .trae import Trae
 from .custom import Connections
 from .monkey_login import MonkeyLogin
+from .errors import safe_error_message
 
 STATIC = Path(__file__).parent / "static"
 PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/messages"}
@@ -196,7 +197,7 @@ def create_app(native=None, buddy=None):
         rows = [{"id": a["uid"], "provider": "trae", "name": a.get("nickname") or a["uid"],
                  "uid": a["uid"], "enabled": a["enabled"], "expires_at": a.get("expires_at", 0) * (1 if a.get("expires_at", 0) > 100000000000 else 1000),
                  "status": "invalid" if a["disabled"] else "paused" if not a["enabled"] else "cooling" if a["cooling"] else "ready",
-                 "remaining": None, "last_error": a.get("reason", "")}
+                 "remaining": a.get("remaining"), "last_error": a.get("reason", "")}
                 for a in data["accounts"]]
         with store.lock:
             rows += [{**a, "provider": "codebuddy"} for a in pool.rows(store.account_rows())]
@@ -218,6 +219,10 @@ def create_app(native=None, buddy=None):
         if not isinstance(body.get("model"), str) or not isinstance(body.get("message"), str) or not 1 <= len(body["message"].strip()) <= 16000:
             raise HTTPException(400, "请选择模型并输入不超过 16000 字符的消息")
         key = secrets.token_urlsafe(32)
+        error_secrets = [key]
+        provider = body["model"].partition("/")[0]
+        if provider in {item["id"] for item in connections.rows()}:
+            error_secrets.append(connections.get(provider)["key"])
         with store.lock:
             store.test_keys.add(digest(key))
         try:
@@ -225,14 +230,24 @@ def create_app(native=None, buddy=None):
                 response = await asyncio.wait_for(client.post("/v1/chat/completions",
                     headers={"Authorization": "Bearer " + key}, json={"model": body["model"],
                     "messages": [{"role": "user", "content": body["message"]}], "max_tokens": 1024, "stream": False}), 150)
-                data = response.json()
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = response.text
                 if response.status_code >= 400:
-                    return {"ok": False, "error": "调用失败，请检查账号是否已登录、已启用且有可用额度。", "status": response.status_code}
+                    return {"ok": False, "error": safe_error_message(data, response.status_code, secrets=error_secrets), "status": response.status_code}
+                if not isinstance(data, dict) or data.get("error"):
+                    return {"ok": False, "error": safe_error_message(data, response.status_code, secrets=error_secrets), "status": response.status_code}
                 choices = data.get("choices") or []
-                answer = choices[0].get("message", {}).get("content") if choices else None
+                message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+                answer = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(answer, str):
+                    answer = None
                 return {"ok": bool(answer), "answer": answer, "error": None if answer else "未返回正文，请检查模型权限或生成预算。"}
-        except (asyncio.TimeoutError, ValueError, httpx.HTTPError):
-            return {"ok": False, "error": "调用超时或响应异常，请稍后重试。"}
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "调用超时（150 秒），请检查平台任务状态或稍后重试。"}
+        except (ValueError, httpx.HTTPError) as exc:
+            return {"ok": False, "error": safe_error_message({"detail": str(exc) or type(exc).__name__}, 502, secrets=error_secrets)}
         finally:
             with store.lock:
                 store.test_keys.discard(digest(key))
@@ -394,6 +409,18 @@ def create_app(native=None, buddy=None):
             raise HTTPException(404, "账号不存在")
         return {"id": aid, "ok": True, "message": "余额已更新", "remaining": account.get("balance", 0) / 1000,
                 "daily_tokens": account.get("daily_token_balance", 0)}
+
+    @app.post("/admin/api/unified/accounts/{provider}/{aid}/balance")
+    async def balance_account(provider: str, aid: str, req: Request):
+        store.require_admin(req)
+        if provider == "trae":
+            return await balance_trae(aid, req)
+        elif provider == "codebuddy":
+            return await asyncio.to_thread(pool.operate, aid, "status")
+        elif provider == "monkeycode":
+            return await balance_monkey(aid, req)
+        else:
+            raise HTTPException(404, "不支持的平台")
 
     @app.post("/admin/api/unified/connections/discover")
     async def discover_connections(req: Request):

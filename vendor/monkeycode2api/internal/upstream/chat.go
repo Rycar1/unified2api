@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
+	"time"
 
 	"monkeycode2api/internal/cred"
 )
@@ -74,18 +74,15 @@ func BuildContent(messages []map[string]any) string {
 
 // chunkStream 由 Go 消费者逐 chunk 读取。
 type ChunkStream struct {
-	ch   chan string
-	errc chan error
-	done chan struct{}
-	once sync.Once
-	buf  strings.Builder
+	ch     chan string
+	errc   chan error
+	cancel context.CancelFunc
 }
 
 func newChunkStream() *ChunkStream {
 	return &ChunkStream{
 		ch:   make(chan string),
 		errc: make(chan error, 1),
-		done: make(chan struct{}),
 	}
 }
 
@@ -97,15 +94,19 @@ func (s *ChunkStream) pushErr(err error) {
 	}
 }
 
-func (s *ChunkStream) Close() { s.once.Do(func() { close(s.ch) }) }
+func (s *ChunkStream) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+}
 
 // Next 返回下一个正文 chunk；done==true 表示流结束。
 func (s *ChunkStream) Next() (text string, done bool, err error) {
 	select {
 	case t, ok := <-s.ch:
 		if !ok { // 已关闭 → 结束或错误
-			if s.closedErr() != nil {
-				return "", true, s.closedErr()
+			if err := s.closedErr(); err != nil {
+				return "", true, err
 			}
 			return "", true, nil
 		}
@@ -128,20 +129,32 @@ func (s *ChunkStream) closedErr() error {
 // Chat 在给定账号上跑一次对话：创建任务 → 拉流 → 返回正文流。
 // done() 用法同参考：Close 后流结束返回。
 func (c *Client) Chat(ctx context.Context, acct *cred.Account, modelID, content string, typ TaskType) (*ChunkStream, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	taskID, err := c.CreateTask(ctx, acct, content, modelID, typ)
 	if err != nil {
+		cancel()
 		return nil, wrapChatErr(err)
 	}
 
 	cs := newChunkStream()
+	cs.cancel = cancel
 	go func() {
-		defer cs.Close()
+		defer close(cs.ch)
+		defer cancel()
+		defer func() {
+			// A completed turn can leave its sandbox in processing state,
+			// occupying the account's concurrency slot. Stop only our task.
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			if err := c.StopTask(cleanupCtx, acct, taskID); err != nil && ctx.Err() == nil {
+				cs.pushErr(fmt.Errorf("upstream task cleanup failed: %w", err))
+			}
+		}()
 		err := c.StreamTask(ctx, acct, taskID, func(text string, done bool) error {
 			if done {
 				return nil
 			}
 			if text != "" {
-				cs.buf.WriteString(text)
 				select {
 				case cs.ch <- text:
 				case <-ctx.Done():
@@ -150,8 +163,8 @@ func (c *Client) Chat(ctx context.Context, acct *cred.Account, modelID, content 
 			}
 			return nil
 		})
-		if err != nil && ctx.Err() == nil {
-			cs.pushErr(err)
+		if err != nil {
+			cs.pushErr(wrapChatErr(err))
 		}
 	}()
 	return cs, nil

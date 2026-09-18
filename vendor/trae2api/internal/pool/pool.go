@@ -39,6 +39,7 @@ type Status struct {
 	UID         string    `json:"uid"`
 	Nickname    string    `json:"nickname,omitempty"`
 	Credits     int64     `json:"credits"`
+	Remaining   *int64    `json:"remaining"` // nil until credits have been queried; zero is a known balance.
 	WorkCredits float64   `json:"work_credits"`
 	Cooling     bool      `json:"cooling"`
 	Until       time.Time `json:"until,omitempty"`
@@ -63,6 +64,7 @@ type Status struct {
 type entry struct {
 	a            *auth.Auth
 	credits      int64
+	creditsKnown bool
 	workCredits  float64
 	disabled     bool // session dead 硬禁用
 	enabled      bool // 用户软开关（默认 true），false 时 Pick 跳过
@@ -104,14 +106,15 @@ func (e *entry) healthyWork(now time.Time) bool {
 
 // stateEntry state.json 单账号持久化条目。
 type stateEntry struct {
-	Credits     int64     `json:"credits"`
-	WorkCredits *float64  `json:"work_credits,omitempty"`
-	Disabled    bool      `json:"disabled"`
-	Enabled     *bool     `json:"enabled,omitempty"` // 指针：旧文件缺省时按 true 处理，不写回脏值
-	Reason      string    `json:"reason,omitempty"`
-	Until       time.Time `json:"until,omitempty"`
-	WorkReason  string    `json:"work_reason,omitempty"`
-	WorkUntil   time.Time `json:"work_until,omitempty"`
+	Credits      int64     `json:"credits"`
+	CreditsKnown bool      `json:"credits_known,omitempty"`
+	WorkCredits  *float64  `json:"work_credits,omitempty"`
+	Disabled     bool      `json:"disabled"`
+	Enabled      *bool     `json:"enabled,omitempty"` // 指针：旧文件缺省时按 true 处理，不写回脏值
+	Reason       string    `json:"reason,omitempty"`
+	Until        time.Time `json:"until,omitempty"`
+	WorkReason   string    `json:"work_reason,omitempty"`
+	WorkUntil    time.Time `json:"work_until,omitempty"`
 }
 
 // stateFile 持久化格式。
@@ -595,6 +598,7 @@ func (p *Pool) SetCredits(uid string, credits int64) {
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
 		e.credits = credits
+		e.creditsKnown = true
 	}
 	p.saveLocked()
 }
@@ -628,7 +632,8 @@ func (p *Pool) ReenableIfCredits(uid string, remain int64) {
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
 		e.credits = remain
-		if remain > 0 && !e.disabled {
+		e.creditsKnown = true
+		if remain > 0 && !e.disabled && e.enabled {
 			e.until = time.Time{}
 			e.reason = ""
 			e.errCount = 0
@@ -700,6 +705,11 @@ func (p *Pool) List() []Status {
 
 func (p *Pool) statusOf(uid string, e *entry) Status {
 	now := time.Now()
+	var remaining *int64
+	if e.creditsKnown {
+		value := e.credits
+		remaining = &value
+	}
 	nick := ""
 	if e.a != nil {
 		nick = e.a.Nickname
@@ -708,6 +718,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		UID:          uid,
 		Nickname:     nick,
 		Credits:      e.credits,
+		Remaining:    remaining,
 		WorkCredits:  e.workCredits,
 		Cooling:      !e.until.IsZero() && now.Before(e.until),
 		Until:        e.until,
@@ -749,15 +760,16 @@ func (p *Pool) load() {
 			wc = *s.WorkCredits
 		}
 		p.byUID[uid] = &entry{
-			a:           &auth.Auth{UID: uid}, // placeholder，Add 时会换成完整凭证
-			credits:     s.Credits,
-			workCredits: wc,
-			disabled:    s.Disabled,
-			enabled:     enabled,
-			reason:      s.Reason,
-			until:       s.Until,
-			workReason:  s.WorkReason,
-			workUntil:   s.WorkUntil,
+			a:            &auth.Auth{UID: uid}, // placeholder，Add 时会换成完整凭证
+			credits:      s.Credits,
+			creditsKnown: s.CreditsKnown || s.Credits != 0,
+			workCredits:  wc,
+			disabled:     s.Disabled,
+			enabled:      enabled,
+			reason:       s.Reason,
+			until:        s.Until,
+			workReason:   s.WorkReason,
+			workUntil:    s.WorkUntil,
 		}
 	}
 }
@@ -769,12 +781,13 @@ func (p *Pool) saveLocked() {
 	sf := stateFile{Accounts: map[string]stateEntry{}}
 	for uid, e := range p.byUID {
 		se := stateEntry{
-			Credits:    e.credits,
-			Disabled:   e.disabled,
-			Reason:     e.reason,
-			Until:      e.until,
-			WorkReason: e.workReason,
-			WorkUntil:  e.workUntil,
+			Credits:      e.credits,
+			CreditsKnown: e.creditsKnown,
+			Disabled:     e.disabled,
+			Reason:       e.reason,
+			Until:        e.until,
+			WorkReason:   e.workReason,
+			WorkUntil:    e.workUntil,
 		}
 		if e.workCredits > 0 {
 			wc := e.workCredits

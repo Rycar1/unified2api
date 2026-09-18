@@ -317,8 +317,10 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback }) {
   async function run(action) {
     setBusy(action)
     try {
-      const suffix = account.provider === 'codebuddy' ? `/actions/${action}` : `/${action === 'status' ? 'balance' : action}`
-      const result = await request(accountEndpoint(account, suffix), { method: 'POST', body: {}, csrf })
+      const path = action === 'status'
+        ? `unified/accounts/${account.provider}/${encodeURIComponent(account.id)}/balance`
+        : accountEndpoint(account, account.provider === 'codebuddy' ? `/actions/${action}` : `/${action}`)
+      const result = await request(path, { method: 'POST', body: {}, csrf })
       if (result.ok === false) throw new Error(result.message || '账号操作失败')
       const balance = typeof result.remaining === 'number' ? `，当前余额 ${result.remaining.toLocaleString()}` : ''
       const fallback = action === 'checkin' ? '签到完成' : action === 'status' ? '余额已更新' : '刷新完成'
@@ -417,8 +419,9 @@ function Accounts({ data, csrf, onRefresh, onAdd }) {
     <DataTable columns={['账号','平台','状态','额度','有效期','操作']} empty={!rows.length && '没有匹配的账号'}>{rows.map(account => {
       const key = `${account.provider}-${account.id}`
       const status = account.enabled === false ? 'paused' : account.pool_state || account.status || 'ready'
+      const remaining = account.remaining
       return <React.Fragment key={key}>
-        <tr><td><strong>{account.name || account.nickname || account.uid}</strong><small>{account.uid || account.id}</small></td><td><span className="provider-badge">{providerName(account.provider)}</span></td><td><StatusBadge status={status}/></td><td className="tabular">{typeof account.remaining === 'number' ? account.remaining.toLocaleString() : '—'}</td><td><span className="muted">{account.expires_at ? new Date(account.expires_at).toLocaleDateString('zh-CN') : '未提供'}</span></td><td className="row-menu"><AccountRowActions account={account} csrf={csrf} onRefresh={onRefresh} onFeedback={showFeedback}/></td></tr>
+        <tr><td><strong>{account.name || account.nickname || account.uid}</strong><small>{account.uid || account.id}</small></td><td><span className="provider-badge">{providerName(account.provider)}</span></td><td><StatusBadge status={status}/></td><td className="tabular">{typeof remaining === 'number' ? remaining.toLocaleString() : '—'}</td><td><span className="muted">{account.expires_at ? new Date(account.expires_at).toLocaleDateString('zh-CN') : '未提供'}</span></td><td className="row-menu"><AccountRowActions account={account} csrf={csrf} onRefresh={onRefresh} onFeedback={showFeedback}/></td></tr>
         {feedback?.key === key && <tr className={`account-feedback ${feedback.error ? 'error' : ''}`}><td colSpan="6">{feedback.message}</td></tr>}
       </React.Fragment>
     })}</DataTable>
@@ -445,13 +448,37 @@ function TestPanel({ data, csrf }) {
   const [model, setModel] = useState('')
   const [message, setMessage] = useState('请只回复：连接成功')
   const [output, setOutput] = useState('')
+  const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   async function submit(event) {
-    event.preventDefault(); setBusy(true); setOutput('正在等待上游响应…')
-    try { const result = await request('unified/test', { method: 'POST', body: { model, message }, csrf }); setOutput(result.ok ? result.answer : result.error) }
-    catch (err) { setOutput(err.message) } finally { setBusy(false) }
+    event.preventDefault()
+    setBusy(true); setFailed(false); setOutput('正在等待上游响应…')
+    try {
+      const result = await request('unified/test', { method: 'POST', body: { model, message }, csrf })
+      setFailed(!result.ok)
+      setOutput(result.ok ? result.answer : result.error || '调用失败，上游未提供错误详情')
+    } catch (err) {
+      setFailed(true)
+      setOutput(err.message)
+    } finally { setBusy(false) }
   }
-  return <div className="test-layout"><form className="content-card" onSubmit={submit}><span className="section-label">请求</span><h2>调用测试</h2><label>模型</label><select value={model} onChange={e => setModel(e.target.value)} required><option value="" disabled>选择模型</option>{(data?.models || []).map(m => <option key={m.id} value={m.id}>{m.id}</option>)}</select><label>消息</label><textarea rows="7" value={message} onChange={e => setMessage(e.target.value)} maxLength="16000" required/><button className="button primary wide" disabled={busy}>{busy ? '正在调用…' : '发送请求'}</button></form><section className="content-card response-panel"><span className="section-label">响应</span><h2>模型回复</h2>{output ? <pre className="response-output">{output}</pre> : <Empty>发送请求后，结果会显示在这里</Empty>}</section></div>
+  return <div className="test-layout">
+    <form className="content-card" onSubmit={submit}>
+      <span className="section-label">请求</span><h2>调用测试</h2>
+      <label htmlFor="test-model">模型</label>
+      <select id="test-model" value={model} onChange={e => setModel(e.target.value)} required>
+        <option value="" disabled>选择模型</option>
+        {(data?.models || []).map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
+      </select>
+      <label htmlFor="test-message">消息</label>
+      <textarea id="test-message" rows="7" value={message} onChange={e => setMessage(e.target.value)} maxLength="16000" required/>
+      <button className="button primary wide" disabled={busy}>{busy ? '正在调用…' : '发送请求'}</button>
+    </form>
+    <section className="content-card response-panel">
+      <span className="section-label">响应</span><h2>{failed ? '调用失败' : '模型回复'}</h2>
+      {output ? <pre className={`response-output ${failed ? 'form-error' : ''}`} role={failed ? 'alert' : 'status'}>{output}</pre> : <Empty>发送请求后，结果会显示在这里</Empty>}
+    </section>
+  </div>
 }
 
 function App() {

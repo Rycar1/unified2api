@@ -64,6 +64,7 @@ func (h *Handler) adminCredits(w http.ResponseWriter, r *http.Request) {
 				ac.Error = "ent_usage: " + err.Error()
 			} else {
 				ac.Remain, ac.Limit, ac.Used, ac.Packs = remain, limit, used, packs
+				h.cfg.Pool.SetCredits(s.UID, remain)
 			}
 			checkedIn, credits, enable, cerr := h.cfg.Upstream.CheckinStatus(a)
 			if cerr != nil {

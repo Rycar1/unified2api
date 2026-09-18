@@ -10,13 +10,13 @@ type checkinResult struct {
 	UID       string `json:"uid"`
 	OK        bool   `json:"ok"`
 	Message   string `json:"message"`
-	Remaining int64  `json:"remaining,omitempty"`
+	Remaining *int64 `json:"remaining"`
 }
 
 func (h *Handler) checkinAccount(uid string) checkinResult {
 	result := checkinResult{UID: uid}
 	for _, status := range h.cfg.Pool.List() {
-		if status.UID == uid && status.Disabled {
+		if status.UID == uid && (!status.Enabled || status.Disabled) {
 			result.Message = "账号已停用"
 			return result
 		}
@@ -60,7 +60,7 @@ func (h *Handler) checkinAccount(uid string) checkinResult {
 	h.cfg.Pool.ReenableIfCredits(uid, remaining)
 	result.OK = true
 	result.Message = message
-	result.Remaining = remaining
+	result.Remaining = &remaining
 	return result
 }
 
@@ -69,7 +69,7 @@ func (h *Handler) checkinAccount(uid string) checkinResult {
 func (h *Handler) adminCheckin(w http.ResponseWriter, r *http.Request) {
 	results := make([]checkinResult, 0)
 	for _, status := range h.cfg.Pool.List() {
-		if !status.Disabled {
+		if status.Enabled && !status.Disabled {
 			results = append(results, h.checkinAccount(status.UID))
 		}
 	}

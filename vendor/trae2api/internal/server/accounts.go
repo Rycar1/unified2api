@@ -27,13 +27,14 @@ type accountSummary struct {
 	Cooling      bool   `json:"cooling"`
 	Reason       string `json:"reason,omitempty"`
 	Credits      int64  `json:"credits"`
+	Remaining    *int64 `json:"remaining"`
 	ErrCount     int    `json:"err_count,omitempty"`
 	// Token 有效期（Unix 秒）与是否临近过期
-	ExpiresAt    int64  `json:"expires_at,omitempty"`
-	ExpiredSoon  bool   `json:"expired_soon,omitempty"`
-	MachineID    string `json:"machine_id,omitempty"` // 前 8 位（脱敏）
-	DeviceID     string `json:"device_id,omitempty"`  // 前 8 位（脱敏）
-	HasAuth      bool   `json:"has_auth"`
+	ExpiresAt   int64  `json:"expires_at,omitempty"`
+	ExpiredSoon bool   `json:"expired_soon,omitempty"`
+	MachineID   string `json:"machine_id,omitempty"` // 前 8 位（脱敏）
+	DeviceID    string `json:"device_id,omitempty"`  // 前 8 位（脱敏）
+	HasAuth     bool   `json:"has_auth"`
 }
 
 // adminAccounts GET /admin/api/accounts：列表（无鉴权，只读）。
@@ -49,6 +50,7 @@ func (h *Handler) adminAccounts(w http.ResponseWriter, r *http.Request) {
 			Cooling:   s.Cooling,
 			Reason:    s.Reason,
 			Credits:   s.Credits,
+			Remaining: s.Remaining,
 			ErrCount:  s.ErrCount,
 		}
 		if a := h.cfg.Pool.AuthByUID(s.UID); a != nil {
@@ -80,10 +82,10 @@ type importRequest struct {
 
 // importResult 导入结果。
 type importResult struct {
-	UID       string `json:"uid"`
-	Nickname  string `json:"nickname,omitempty"`
-	Action    string `json:"action"` // "created" | "updated"
-	NeedsCheck bool  `json:"needs_check,omitempty"` // 建议用户确认额度
+	UID        string `json:"uid"`
+	Nickname   string `json:"nickname,omitempty"`
+	Action     string `json:"action"`                // "created" | "updated"
+	NeedsCheck bool   `json:"needs_check,omitempty"` // 建议用户确认额度
 }
 
 // adminImportAccount POST /admin/api/accounts/import：导入凭证。
@@ -161,8 +163,8 @@ func (h *Handler) importFromCallback(req importRequest) (*auth.Auth, error) {
 	a := &auth.Auth{
 		AccessToken:  info.AccessToken,
 		RefreshToken: info.RefreshToken,
-		UID:         info.UID,
-		Nickname:    info.Nickname,
+		UID:          info.UID,
+		Nickname:     info.Nickname,
 		EnterpriseID: info.EnterpriseID,
 		Domain:       "trae.cn",
 		ApiHost:      "https://api.trae.com.cn",
@@ -319,9 +321,9 @@ func (h *Handler) adminRefreshAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	st, _ := h.cfg.Pool.Status(uid)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uid":       uid,
+		"uid":        uid,
 		"expires_at": a.ExpiresAt,
-		"status":    st,
+		"status":     st,
 	})
 }
 
