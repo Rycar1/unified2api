@@ -1,8 +1,10 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 if (-not (Test-Path -LiteralPath 'unified2api-app.tar')) {
-    docker load -i unified2api-app.tar
+    throw 'Missing unified2api-app.tar'
 }
+docker load -i unified2api-app.tar
+if ($LASTEXITCODE -ne 0) { throw 'Could not load the offline Docker image' }
 foreach ($volume in @('unified2api_trae-auth','unified2api_trae-data','unified2api_buddy-data')) {
     docker volume create $volume | Out-Null
     $archive = "volumes/$volume.tar"
