@@ -410,6 +410,18 @@ PASSTHROUGH_BODY_KEYS = {
     "reasoning_summary",
 }
 
+DEFAULT_HIGH_REASONING_MODELS = {"deepseek-v4.1-flash"}
+
+
+def apply_model_defaults(body: dict) -> dict:
+    """Apply provider defaults while preserving explicit client settings."""
+    if (
+        body.get("model") in DEFAULT_HIGH_REASONING_MODELS
+        and "reasoning_effort" not in body
+    ):
+        body["reasoning_effort"] = "high"
+    return body
+
 # ---------------------------------------------------------------------------
 # FastAPI 应用
 # ---------------------------------------------------------------------------
@@ -555,6 +567,7 @@ async def chat_completions(
     client_wants_stream = bool(payload.get("stream"))
     body = {k: payload[k] for k in PASSTHROUGH_BODY_KEYS if k in payload}
     body.setdefault("model", "auto")
+    apply_model_defaults(body)
     # 后端只支持流式：始终以 stream=True 调后端，非流式由转换器聚合
     body["stream"] = True
     if "stream_options" not in body:
@@ -1018,6 +1031,7 @@ async def create_response(
 
     chat_body, projection_stats = project_responses_chat_body(chat_body)
     chat_body.setdefault("model", "auto")
+    apply_model_defaults(chat_body)
     chat_body["stream"] = True
     if "stream_options" not in chat_body:
         chat_body["stream_options"] = {"include_usage": True}
@@ -1201,6 +1215,7 @@ async def create_message(
         )
 
     chat_body.setdefault("model", "auto")
+    apply_model_defaults(chat_body)
     # 读取用户的 stream 参数，如果未提供则默认为 True
     user_stream = payload.get("stream", True)
     # 无论用户如何设置，都向后端请求流式响应（后端只支持流式）

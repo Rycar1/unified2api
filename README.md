@@ -62,6 +62,8 @@ docker compose up -d --build
 
 选择对应平台后，可以通过网页登录或导入该平台支持的凭据文件添加账号。网页登录过程在平台官方页面完成。
 
+CodeBuddy 的 `deepseek-v4.1-flash` 在客户端未指定推理强度时默认使用 `reasoning_effort: high`。客户端显式传入 `reasoning_effort` 时以客户端设置为准。
+
 ### MonkeyCode
 
 Windows 用户可以从控制台下载登录助手。登录助手会打开独立浏览器会话，在官网登录完成后将本次授权提交给本机服务。
