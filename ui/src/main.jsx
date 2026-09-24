@@ -234,7 +234,7 @@ function KeyDialog({ csrf, onClose, onSaved }) {
   const [error, setError] = useState('')
   async function save(event) {
     event.preventDefault(); setBusy(true); setError('')
-    try { const result = await request('keys', { method: 'POST', body: { name }, csrf }); setCreated(result.key); await onSaved(false) }
+    try { const result = await request('keys', { method: 'POST', body: { name }, csrf }); setCreated(result.key); await onSaved(true) }
     catch (err) { setError(err.message) } finally { setBusy(false) }
   }
   return <Modal title={created ? '保存新密钥' : '创建 API 密钥'} subtitle="客户端访问" onClose={onClose}>{created ? <div className="created-key"><p>完整密钥只显示一次，请立即复制并保存。</p><code>{created}</code><button className="button primary wide" onClick={() => navigator.clipboard.writeText(created)}><Copy size={15}/>复制密钥</button></div> : <form onSubmit={save}><label>密钥名称</label><input required maxLength="60" value={name} onChange={e => setName(e.target.value)} placeholder="例如：Cherry Studio"/>{error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy}>{busy ? '正在创建…' : '创建密钥'}</button></form>}</Modal>
@@ -447,9 +447,89 @@ function Models({ data, onNavigate }) {
   return <section className="content-card"><div className="section-head"><div><span className="section-label">模型目录</span><h2>{data?.models?.length || 0} 个可用模型</h2></div><label className="search-box"><Search size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索模型" /></label></div><DataTable columns={['模型 ID','来源','兼容接口','']} empty={!rows.length && '没有匹配的模型'}>{rows.map(m => <tr key={m.id}><td><code>{m.id}</code></td><td><span className="provider-badge">{providerName(m.owned_by)}</span></td><td className="muted">{m.owned_by === 'codebuddy' ? 'Chat · Responses · Messages' : 'Chat Completions'}</td><td><button className="link-button" onClick={() => onNavigate('test')}>测试</button></td></tr>)}</DataTable></section>
 }
 
-function Keys({ data, onAdd }) {
+function KeyRowActions({ apiKey, csrf, onRefresh, onFeedback }) {
+  const [more, setMore] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [name, setName] = useState(apiKey.name)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
+  const moreButton = useRef(null)
+  const menu = useRef(null)
+
+  useEffect(() => {
+    if (!more) return undefined
+    function close(event) {
+      if (!moreButton.current?.contains(event.target) && !menu.current?.contains(event.target)) setMore(false)
+    }
+    function closeForViewportChange() { setMore(false) }
+    function closeOnEscape(event) { if (event.key === 'Escape') setMore(false) }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('resize', closeForViewportChange)
+    window.addEventListener('scroll', closeForViewportChange, true)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('resize', closeForViewportChange)
+      window.removeEventListener('scroll', closeForViewportChange, true)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [more])
+
+  function toggleMore() {
+    if (!more && moreButton.current) {
+      const rect = moreButton.current.getBoundingClientRect()
+      setMenuPosition({ top: Math.min(rect.bottom + 7, window.innerHeight - 90), left: Math.max(10, rect.right - 126) })
+    }
+    setMore(value => !value)
+  }
+
+  async function rename(event) {
+    event.preventDefault()
+    setBusy(true); setError('')
+    try {
+      await request(`keys/${encodeURIComponent(apiKey.id)}`, { method: 'PATCH', body: { name: name.trim() }, csrf })
+      setRenaming(false)
+      onFeedback('密钥名称已更新', false)
+      await onRefresh()
+    } catch (err) { setError(err.message) }
+    finally { setBusy(false) }
+  }
+
+  async function remove() {
+    setMore(false)
+    if (!window.confirm(`确定撤销密钥“${apiKey.name}”吗？使用它的客户端将立即无法访问 API。`)) return
+    setBusy(true)
+    try {
+      await request(`keys/${encodeURIComponent(apiKey.id)}`, { method: 'DELETE', csrf })
+      onFeedback('密钥已撤销', false)
+      await onRefresh()
+    } catch (err) { onFeedback(err.message, true) }
+    finally { setBusy(false) }
+  }
+
+  return <>
+    <button ref={moreButton} className={`dots-action ${more ? 'active' : ''}`} onClick={toggleMore} aria-label={`管理密钥 ${apiKey.name}`} aria-expanded={more} aria-haspopup="menu" disabled={busy}>•••</button>
+    {more && createPortal(<div ref={menu} className="account-popover" style={menuPosition} role="menu">
+      <button role="menuitem" onClick={() => { setMore(false); setName(apiKey.name); setError(''); setRenaming(true) }}>重命名</button>
+      <button role="menuitem" className="danger-text" onClick={remove}>撤销密钥</button>
+    </div>, document.body)}
+    {renaming && createPortal(<Modal title="重命名密钥" subtitle="客户端访问" onClose={() => setRenaming(false)}>
+      <form onSubmit={rename}><label htmlFor={`key-name-${apiKey.id}`}>密钥名称</label><input id={`key-name-${apiKey.id}`} autoFocus required maxLength="60" value={name} onChange={event => setName(event.target.value)}/>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="button primary wide" disabled={busy}>{busy ? '正在保存…' : '保存名称'}</button>
+      </form>
+    </Modal>, document.body)}
+  </>
+}
+
+function Keys({ data, csrf, onRefresh, onAdd }) {
+  const [feedback, setFeedback] = useState(null)
   const rows = data?.keys || []
-  return <section className="content-card"><div className="section-head"><div><span className="section-label">访问控制</span><h2>API 密钥</h2></div><button className="button primary" onClick={onAdd}><Plus size={15}/>创建密钥</button></div><DataTable columns={['名称','前缀','创建时间','']} empty={!rows.length && '暂未创建 API 密钥'}>{rows.map(k => <tr key={k.id}><td><strong>{k.name}</strong></td><td><code>{k.prefix || '已隐藏'}…</code></td><td className="muted">{k.created ? new Date(k.created * 1000).toLocaleDateString('zh-CN') : '—'}</td><td className="row-menu"><button>•••</button></td></tr>)}</DataTable></section>
+  return <section className="content-card"><div className="section-head"><div><span className="section-label">访问控制</span><h2>API 密钥</h2></div><button className="button primary" onClick={onAdd}><Plus size={15}/>创建密钥</button></div>
+    {feedback && <div className={`result-banner ${feedback.error ? 'error' : ''}`} role="status">{feedback.message}</div>}
+    <DataTable columns={['名称','前缀','创建时间','操作']} empty={!rows.length && '暂未创建 API 密钥'}>{rows.map(k => <tr key={k.id}><td><strong>{k.name}</strong></td><td><code>{k.hint || (k.prefix ? `${k.prefix}…` : '已隐藏')}</code></td><td className="muted">{k.created ? new Date(k.created * 1000).toLocaleDateString('zh-CN') : '—'}</td><td className="row-menu"><KeyRowActions apiKey={k} csrf={csrf} onRefresh={onRefresh} onFeedback={(message, error) => setFeedback({ message, error })}/></td></tr>)}</DataTable>
+  </section>
 }
 
 function RouteDialog({ data, csrf, onClose, onSaved }) {
@@ -523,10 +603,10 @@ const exactCount = value => tokenCount(value).toLocaleString('zh-CN')
 const tokenText = value => {
   const count = tokenCount(value)
   if (!count) return '0'
-  if (count < 10000) return '<0.01 百万'
+  if (count < 10000) return '<0.01 M'
   const large = count >= 100000000
   const amount = count / (large ? 100000000 : 1000000)
-  return `${amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} ${large ? '亿' : '百万'}`
+  return `${amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} ${large ? '亿' : 'M'}`
 }
 const totalTokens = row => tokenCount(row?.prompt_tokens) + tokenCount(row?.completion_tokens)
 const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -853,7 +933,7 @@ function App() {
     accounts: <Accounts data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('account')}/>,
     connections: <Connections data={data} onAdd={() => setDialog('connection')}/>,
     models: <Models data={data} onNavigate={navigate}/>,
-    keys: <Keys data={data} onAdd={() => setDialog('key')}/>,
+    keys: <Keys data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('key')}/>,
     test: <TestPanel data={data} csrf={csrf}/>,
     routes: <Routes data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('route')}/>,
     logs: <Logs csrf={csrf}/>,

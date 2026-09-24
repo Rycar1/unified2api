@@ -84,6 +84,12 @@ class AdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.delete("/admin/api/keys/" + old)).status_code, 400)
         result = await self.client.post("/admin/api/keys", json={"name": "New"})
         newkey = result.json()["key"]
+        kid = result.json()["id"]
+        self.assertEqual((await self.client.patch("/admin/api/keys/" + kid, json={"name": "  Renamed  "})).json(), {"ok": True, "name": "Renamed"})
+        self.assertEqual((await self.client.patch("/admin/api/keys/" + kid, json={"name": " "})).status_code, 400)
+        self.assertEqual((await self.client.patch("/admin/api/keys/missing", json={"name": "Other"})).status_code, 404)
+        self.assertEqual(next(item["name"] for item in (await self.client.get("/admin/api/overview")).json()["keys"] if item["id"] == kid), "Renamed")
+        self.assertEqual((await self.client.get("/v1/models", headers={"Authorization":"Bearer " + newkey})).status_code, 200)
         await self.client.delete("/admin/api/keys/" + old)
         self.assertEqual((await self.client.get("/v1/models", headers={"Authorization":"Bearer " + API})).status_code, 401)
         self.assertEqual((await self.client.get("/v1/models", headers={"Authorization":"Bearer " + newkey})).status_code, 200)

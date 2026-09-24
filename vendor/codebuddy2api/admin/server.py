@@ -497,6 +497,21 @@ def create_app(root=None, auth_dir=None, initial_key=None, admin_key=None, secur
             store.save()
         return {"id": kid, "key": key}
 
+    @app.patch("/admin/api/keys/{kid}")
+    async def rename_key(kid: str, req: Request):
+        store.require_admin(req)
+        body = await payload(req)
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 60:
+            raise HTTPException(400, "密钥名称需为 1–60 个字符")
+        with store.lock:
+            item = store.data["keys"].get(kid)
+            if item is None:
+                raise HTTPException(404, "密钥不存在")
+            item["name"] = name.strip()
+            store.save()
+        return {"ok": True, "name": item["name"]}
+
     @app.delete("/admin/api/keys/{kid}")
     async def revoke_key(kid: str, req: Request):
         store.require_admin(req)
