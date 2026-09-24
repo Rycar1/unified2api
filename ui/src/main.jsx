@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import {
-  Activity, Blocks, Bot, Check, ChevronDown, CircleGauge, Copy, Database, ExternalLink,
+  Activity, Blocks, Bot, Check, ChevronDown, CircleGauge, Copy, Database, ExternalLink, Moon, Sun,
   Archive, Clock, Download, FileText, FlaskConical, KeyRound, LogOut, Menu, Network,
   Play, Plus, RefreshCw, Save, Search, Server, Settings2, Trash2, Upload, Users,
   WalletCards, X,
@@ -20,12 +20,14 @@ const pageMeta = {
   logs: ['调用记录', '查看成功率、耗时和 Token 使用'],
   automation: ['自动任务', '定时签到、刷新余额和发送告警'],
   backup: ['备份恢复', '导出或恢复加密的完整服务数据'],
+  usage: ['用量统计', '查看每日、每周和累计 Token 消耗'],
+  settings: ['设置', '调整外观、统计保留时间和自动刷新'],
 }
 
 const navGroups = [
   { label: '工作台', items: [['overview', CircleGauge], ['accounts', Users], ['connections', Server], ['models', Bot]] },
   { label: '开发', items: [['keys', KeyRound], ['test', FlaskConical], ['routes', Network]] },
-  { label: '运维', items: [['logs', FileText], ['automation', Clock], ['backup', Archive]] },
+  { label: '运维', items: [['usage', Activity], ['logs', FileText], ['automation', Clock], ['backup', Archive]] },
 ]
 
 const providerName = id => ({ trae: 'TRAE', codebuddy: 'CodeBuddy', monkeycode: 'MonkeyCode', route: '智能路由' }[id] || id)
@@ -516,6 +518,185 @@ function Logs({ csrf }) {
   </div>
 }
 
+const tokenCount = value => Number(value || 0)
+const tokenText = value => tokenCount(value).toLocaleString('zh-CN')
+const totalTokens = row => tokenCount(row?.prompt_tokens) + tokenCount(row?.completion_tokens)
+const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+const parseLocalDay = key => new Date(`${key}T00:00:00`)
+
+function Usage({ settings, refreshNonce }) {
+  const [state, setState] = useState({ daily: [], models: [], total: {}, generated_at: 0 })
+  const [period, setPeriod] = useState('daily')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [hoverDay, setHoverDay] = useState('')
+  async function load() {
+    setLoading(true); setError('')
+    try { setState(await request('unified/usage')) }
+    catch (err) { setError(err.message) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [settings?.retention_days, refreshNonce])
+
+  const dailyMap = useMemo(() => new Map((state.daily || []).map(row => [row.day, row])), [state.daily])
+  const retentionDays = Math.min(365, Math.max(30, Number(settings?.retention_days || state.retention_days || 365)))
+  const heatmap = useMemo(() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() - retentionDays + 1)
+    const first = new Date(cutoff); first.setDate(first.getDate() - ((first.getDay() + 6) % 7))
+    const weeks = []
+    for (let cursor = new Date(first); cursor <= today; cursor.setDate(cursor.getDate() + 7)) {
+      const week = []
+      for (let weekday = 0; weekday < 7; weekday += 1) {
+        const day = new Date(cursor); day.setDate(cursor.getDate() + weekday)
+        const key = dateKey(day)
+        week.push({ key, visible: day >= cutoff && day <= today, row: dailyMap.get(key), day })
+      }
+      weeks.push(week)
+    }
+    const max = Math.max(0, ...state.daily.map(totalTokens))
+    const monthLabels = weeks.map((week, index) => {
+      const firstVisible = week.find(cell => cell.visible)
+      return firstVisible && (index === 0 || firstVisible.day.getDate() <= 7)
+        ? { index, label: `${firstVisible.day.getMonth() + 1}月` } : null
+    }).filter(Boolean)
+    return { weeks, max, monthLabels }
+  }, [dailyMap, retentionDays, state.daily])
+
+  const todayKey = dateKey(new Date())
+  const summary = useMemo(() => {
+    const sumSince = days => {
+      const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - days + 1)
+      return state.daily.filter(row => row.day >= dateKey(from)).reduce((sum, row) => sum + totalTokens(row), 0)
+    }
+    return { today: totalTokens(dailyMap.get(todayKey)), week: sumSince(7), month: sumSince(30), total: totalTokens(state.total) }
+  }, [dailyMap, state.daily, state.total, todayKey])
+
+  const trend = useMemo(() => {
+    const byDay = new Map((state.daily || []).map(row => [row.day, row]))
+    if (period === 'daily') {
+      const end = new Date(); end.setHours(0, 0, 0, 0)
+      return Array.from({ length: Math.min(30, retentionDays) }, (_, index) => {
+        const day = new Date(end); day.setDate(end.getDate() - (Math.min(30, retentionDays) - index - 1))
+        const key = dateKey(day); const row = byDay.get(key) || {}
+        return { key, label: `${day.getMonth() + 1}/${day.getDate()}`, tokens: totalTokens(row) }
+      })
+    }
+    const grouped = new Map()
+    for (const row of state.daily || []) {
+      const day = parseLocalDay(row.day)
+      if (period === 'weekly') {
+        day.setDate(day.getDate() - ((day.getDay() + 6) % 7))
+      } else day.setDate(1)
+      const key = dateKey(day)
+      const item = grouped.get(key) || { key, label: `${day.getMonth() + 1}${period === 'weekly' ? `/${day.getDate()}` : '月'}`, tokens: 0 }
+      item.tokens += totalTokens(row); grouped.set(key, item)
+    }
+    if (period === 'total') {
+      const now = new Date(); const monthCount = Math.min(12, Math.ceil(retentionDays / 30.4) + 1)
+      const months = Array.from({ length: monthCount }, (_, index) => {
+        const month = new Date(now.getFullYear(), now.getMonth() - (monthCount - index - 1), 1)
+        const key = dateKey(month)
+        return grouped.get(key) || { key, label: `${month.getMonth() + 1}月`, tokens: 0 }
+      })
+      let cumulative = 0
+      return months.map(item => ({ ...item, tokens: cumulative += item.tokens }))
+    }
+    const count = Math.min(12, Math.ceil(retentionDays / 7))
+    const currentMonday = new Date(); currentMonday.setHours(0, 0, 0, 0); currentMonday.setDate(currentMonday.getDate() - ((currentMonday.getDay() + 6) % 7))
+    return Array.from({ length: count }, (_, index) => {
+      const week = new Date(currentMonday); week.setDate(currentMonday.getDate() - (count - index - 1) * 7)
+      const key = dateKey(week)
+      return grouped.get(key) || { key, label: `${week.getMonth() + 1}/${week.getDate()}`, tokens: 0 }
+    })
+  }, [period, retentionDays, state.daily])
+
+  const chartModels = useMemo(() => {
+    const palette = ['#368dcc', '#37a978', '#8666d9', '#ed6668', '#d4a33b', '#34a5ad']
+    const ranked = (state.models || []).map(row => ({ ...row, tokens: totalTokens(row) })).sort((a, b) => b.tokens - a.tokens)
+    const visible = ranked.slice(0, 5).map((row, index) => ({ ...row, color: palette[index] }))
+    const rest = ranked.slice(5)
+    if (rest.length) visible.push({ model: '其他模型', tokens: rest.reduce((sum, row) => sum + row.tokens, 0), requests: rest.reduce((sum, row) => sum + tokenCount(row.requests), 0), color: palette[5] })
+    return visible
+  }, [state.models])
+  const modelTotal = chartModels.reduce((sum, item) => sum + item.tokens, 0)
+  const circumference = 2 * Math.PI * 56
+  let accumulated = 0
+  const ring = chartModels.map(item => {
+    const length = modelTotal ? item.tokens / modelTotal * circumference : 0
+    const segment = { ...item, length, offset: accumulated }
+    accumulated += length
+    return segment
+  })
+  const maxTrend = Math.max(1, ...trend.map(item => item.tokens))
+
+  return <div className="stack usage-page">
+    <section className="summary-grid usage-summary">
+      {[["今日 Token", summary.today], ["近 7 日", summary.week], ["近 30 日", summary.month], ["累计 Token", summary.total]].map(([label, value]) => <article className="summary-card" key={label}><div><strong>{tokenText(value)}</strong><span>{label}</span></div></article>)}
+    </section>
+    <section className="content-card usage-heatmap-card">
+      <div className="section-head"><div><span className="section-label">活动日历</span><h2>Token 消耗热力图</h2><p className="muted">每格代表一天；颜色越深，当天消耗越多。当前保留 {retentionDays} 天。</p></div><button className="button secondary" onClick={load} disabled={loading}><RefreshCw size={14} className={loading ? 'spin' : ''}/>刷新</button></div>
+      {error && <div className="result-banner error">统计加载失败：{error}</div>}
+      <div className="heatmap-scroll" aria-label="每日 Token 消耗日历">
+        <div className="heatmap-days"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span></span></div>
+        <div className="heatmap-body">
+          <div className="heatmap-months" style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, 12px)` }}>{heatmap.monthLabels.map(item => <span key={item.index} style={{ gridColumn: item.index + 1 }}>{item.label}</span>)}</div>
+          <div className="heatmap-weeks" style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, 12px)` }}>
+            {heatmap.weeks.map((week, index) => <div className="heatmap-week" key={index}>{week.map(cell => {
+              const count = totalTokens(cell.row)
+              const level = count ? Math.min(4, Math.max(1, Math.ceil(count / Math.max(1, heatmap.max) * 4))) : 0
+              const description = `${cell.key} · ${tokenText(count)} tokens · ${cell.row?.requests || 0} 次请求`
+              return <span key={cell.key} className={`heat-cell level-${level} ${cell.visible ? '' : 'outside'}`} title={cell.visible ? description : ''} aria-label={cell.visible ? description : undefined} onMouseEnter={() => cell.visible && setHoverDay(description)} onMouseLeave={() => setHoverDay('')}/>
+            })}</div>)}
+          </div>
+        </div>
+      </div>
+      <div className="heatmap-footer"><span className="muted">{hoverDay || '将鼠标移到方格查看当天详情'}</span><span className="heat-legend"><small>少</small>{[0,1,2,3,4].map(level => <i key={level} className={`heat-cell level-${level}`}/>)}<small>多</small></span></div>
+    </section>
+    <div className="usage-lower-grid">
+      <section className="content-card trend-card">
+        <div className="section-head"><div><span className="section-label">消耗趋势</span><h2>{period === 'daily' ? '每日 Token' : period === 'weekly' ? '每周 Token' : '按月累计 Token'}</h2></div><div className="filter-tabs" role="tablist" aria-label="统计周期">{[['daily','每日'],['weekly','每周'],['total','累计']].map(([id,label]) => <button key={id} role="tab" aria-selected={period === id} className={period === id ? 'active' : ''} onClick={() => setPeriod(id)}>{label}</button>)}</div></div>
+        <div className="trend-chart" role="img" aria-label="Token 消耗趋势柱状图">
+          {trend.length ? trend.map((item, index) => <div className="trend-column" key={item.key} title={`${item.label} · ${tokenText(item.tokens)} tokens`}><span className="trend-value">{tokenText(item.tokens)}</span><i style={{ height: `${Math.max(item.tokens ? 3 : 0, item.tokens / maxTrend * 100)}%` }}/><small>{index === 0 || index === trend.length - 1 || index % Math.max(1, Math.ceil(trend.length / 8)) === 0 ? item.label : ''}</small></div>) : <Empty>暂无统计数据，产生调用后会显示 Token 用量</Empty>}
+        </div>
+        <p className="muted usage-footnote">用量取自上游返回的 Token 统计；若上游未返回用量字段，该次请求会显示为 0。</p>
+      </section>
+      <section className="content-card model-usage-card">
+        <div className="section-head"><div><span className="section-label">模型分布</span><h2>按模型统计</h2></div></div>
+        {modelTotal ? <div className="model-usage-content">
+          <div className="donut-wrap"><svg viewBox="0 0 144 144" role="img" aria-label={`累计 ${tokenText(modelTotal)} tokens`}><circle className="donut-track" cx="72" cy="72" r="56"/><g transform="rotate(-90 72 72)">{ring.map(item => <circle key={item.model} cx="72" cy="72" r="56" fill="none" stroke={item.color} strokeWidth="22" strokeDasharray={`${item.length} ${circumference - item.length}`} strokeDashoffset={-item.offset}/>)}</g></svg><div><strong>{tokenText(modelTotal)}</strong><span>tokens</span></div></div>
+          <div className="model-usage-list">{chartModels.map(item => <div className="model-usage-row" key={item.model}><div><i style={{ background: item.color }}/><code title={item.model}>{item.model}</code><strong>{modelTotal ? `${(item.tokens / modelTotal * 100).toFixed(1)}%` : '0%'}</strong></div><small>{tokenText(item.tokens)} tokens · {tokenText(item.requests)} 次请求</small></div>)}</div>
+        </div> : <Empty>{loading ? '正在读取用量…' : '暂无 Token 统计数据'}</Empty>}
+      </section>
+    </div>
+  </div>
+}
+
+function SettingsPage({ settings, theme, onThemeChange, onSave, onNavigate }) {
+  const [form, setForm] = useState(settings)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  useEffect(() => setForm(settings), [settings])
+  async function save(event) {
+    event.preventDefault(); setBusy(true); setMessage('')
+    if (Number(form.retention_days) < Number(settings.retention_days) && !window.confirm(`缩短保留时间会立即删除早于 ${form.retention_days} 天的统计记录，是否继续？`)) { setBusy(false); return }
+    try { await onSave(form); setMessage('设置已保存') }
+    catch (err) { setMessage(err.message) }
+    finally { setBusy(false) }
+  }
+  return <div className="settings-grid console-settings">
+    <section className="content-card"><span className="section-label">外观</span><h2>控制台主题</h2><p className="muted settings-copy">主题只保存在当前浏览器中，不影响其他用户。</p><div className="theme-options">
+      {[['light',Sun,'浅色'],['dark',Moon,'深色']].map(([id,Icon,label]) => <button type="button" key={id} className={`theme-option ${theme === id ? 'active' : ''}`} onClick={() => onThemeChange(id)}><Icon size={18}/><span>{label}</span>{theme === id && <Check size={15}/>}</button>)}
+    </div></section>
+    <form className="content-card" onSubmit={save}><span className="section-label">数据与体验</span><h2>统计与刷新</h2>
+      <label htmlFor="retention-days">调用统计保留时间</label><select id="retention-days" value={form.retention_days || 365} onChange={e => setForm(current => ({ ...current, retention_days: Number(e.target.value) }))}>{[30,90,180,365].map(days => <option key={days} value={days}>{days} 天</option>)}</select><p className="settings-copy muted">只保留请求时间、模型、状态、耗时和 Token 数；不会保存提示词或回复正文。当前数据最多可保留 365 天。</p>
+      <label htmlFor="auto-refresh">自动刷新间隔</label><select id="auto-refresh" value={form.auto_refresh_seconds || 0} onChange={e => setForm(current => ({ ...current, auto_refresh_seconds: Number(e.target.value) }))}><option value="0">关闭</option><option value="30">30 秒</option><option value="60">1 分钟</option><option value="300">5 分钟</option></select><p className="settings-copy muted">开启后，控制台会按间隔刷新账号状态和统计数据。</p>
+      <button className="button primary wide" disabled={busy}><Save size={15}/>{busy ? '正在保存…' : '保存设置'}</button>{message && <div className={`result-banner settings-message ${message !== '设置已保存' ? 'error' : ''}`}>{message}</div>}
+    </form>
+    <section className="content-card settings-wide"><span className="section-label">数据说明</span><h2>Token 统计如何计算</h2><p className="muted settings-copy">统计从每次 API 返回的 usage 字段读取输入和输出 Token。更换保留时间后，超出范围的历史统计会清理；已清理的数据无法恢复。累计数字表示当前保留范围内的用量。</p><button className="button secondary" type="button" onClick={() => onNavigate('logs')}><FileText size={14}/>查看调用记录</button></section>
+  </div>
+}
+
 function Automation({ data, csrf, onRefresh }) {
   const initial = data?.automation || {}
   const [form, setForm] = useState(initial)
@@ -621,21 +802,38 @@ function App() {
   const [authenticated, setAuthenticated] = useState(true)
   const [drawer, setDrawer] = useState(false)
   const [dialog, setDialog] = useState(null)
+  const [consoleSettings, setConsoleSettings] = useState({ retention_days: 365, auto_refresh_seconds: 0 })
+  const [theme, setTheme] = useState(() => window.localStorage.getItem('unified-theme') || 'light')
+  const [refreshNonce, setRefreshNonce] = useState(0)
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [overview, session] = await Promise.all([request('unified/overview'), request('session')])
-      setData(overview); setCsrf(session.csrf); setAuthenticated(true)
+      const [overview, session, preferences] = await Promise.all([request('unified/overview'), request('session'), request('unified/settings')])
+      setData(overview); setCsrf(session.csrf); setConsoleSettings(preferences.settings); setAuthenticated(true); setRefreshNonce(value => value + 1)
     }
     catch (err) { if (err.status === 401) setAuthenticated(false) }
     finally { setLoading(false) }
-  }
-  useEffect(() => { load() }, [])
+  }, [])
+  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    window.localStorage.setItem('unified-theme', theme)
+  }, [theme])
+  useEffect(() => {
+    const interval = Number(consoleSettings.auto_refresh_seconds || 0)
+    if (!authenticated || !interval) return undefined
+    const timer = window.setInterval(() => { void load() }, interval * 1000)
+    return () => window.clearInterval(timer)
+  }, [authenticated, consoleSettings.auto_refresh_seconds, load])
   async function login(key) { const result = await request('login', { method: 'POST', body: { key } }); setCsrf(result.csrf); setAuthenticated(true); await load() }
   async function logout() { await request('logout', { method: 'POST', body: {}, csrf }); setData(null); setAuthenticated(false) }
   function navigate(next) { setPage(next); setDrawer(false) }
   async function saved(keepOpen = false) { await load(); if (!keepOpen) setDialog(null) }
+  async function saveConsoleSettings(form) {
+    const result = await request('unified/settings', { method: 'PATCH', body: form, csrf })
+    setConsoleSettings(result.settings)
+  }
 
   if (loading && !data) return <div className="boot"><RefreshCw className="spin" size={20}/><span>正在连接控制台</span></div>
   if (!authenticated) return <Login onLogin={login}/>
@@ -651,6 +849,8 @@ function App() {
     logs: <Logs csrf={csrf}/>,
     automation: <Automation data={data} csrf={csrf} onRefresh={load}/>,
     backup: <Backup csrf={csrf}/>,
+    usage: <Usage settings={consoleSettings} refreshNonce={refreshNonce}/>,
+    settings: <SettingsPage settings={consoleSettings} theme={theme} onThemeChange={setTheme} onSave={saveConsoleSettings} onNavigate={navigate}/>,
   }
   const content = pages[page]
 
@@ -662,7 +862,7 @@ function App() {
       <div className="sidebar-top"><a className="wordmark" href="/admin/">Unified</a><button className="mobile-close" onClick={() => setDrawer(false)}><X size={18}/></button></div>
       <div className="environment"><span><i/>服务在线</span><small>本地网关</small></div>
       <nav>{navGroups.map(group => <div className="nav-group" key={group.label}><span>{group.label}</span>{group.items.map(([id, Icon]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={17}/>{pageMeta[id][0]}</button>)}</div>)}</nav>
-      <div className="sidebar-bottom"><button><Settings2 size={17}/>设置</button><button onClick={logout}><LogOut size={17}/>退出登录</button></div>
+      <div className="sidebar-bottom"><button className={page === 'settings' ? 'active' : ''} onClick={() => navigate('settings')}><Settings2 size={17}/>设置</button><button onClick={logout}><LogOut size={17}/>退出登录</button></div>
     </aside>
     <div className="workspace">
       <header className="topbar"><button className="menu-button" onClick={() => setDrawer(true)}><Menu size={19}/></button><div><span>Unified / {title}</span></div><div className="top-actions"><span className="live-status"><i/>运行中</span><button className="icon-action" onClick={load} aria-label="刷新"><RefreshCw size={16} className={loading ? 'spin' : ''}/></button></div></header>

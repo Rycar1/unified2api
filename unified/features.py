@@ -43,6 +43,7 @@ class UnifiedConfig:
                 "webhook_url": "", "low_balance": 0, "notify_failures": True,
             })
             root.setdefault("automation_history", [])
+            root.setdefault("console_settings", {"retention_days": 365, "auto_refresh_seconds": 0})
             store.save()
 
     def get(self, key, default=None):
@@ -164,8 +165,9 @@ class RouteManager:
 
 
 class RequestLog:
-    def __init__(self, path):
+    def __init__(self, path, retention_days=365):
         self.path = Path(path)
+        self.retention_days = max(30, min(int(retention_days), 365))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         with closing(self.connect()) as db:
@@ -190,8 +192,38 @@ class RequestLog:
                  (row.get("model") or "").partition("/")[0], row.get("status"), int(row["ok"]),
                  round(row["duration_ms"]), row.get("prompt_tokens", 0), row.get("completion_tokens", 0),
                  row.get("reasoning_tokens", 0), row["outcome"]))
-            db.execute("DELETE FROM requests WHERE created < ?", (int(time.time()) - 90 * 86400,))
+            db.execute("DELETE FROM requests WHERE created < ?", (int(time.time()) - self.retention_days * 86400,))
             db.commit()
+
+    def set_retention_days(self, days):
+        self.retention_days = max(30, min(int(days), 365))
+        cutoff = int(time.time()) - self.retention_days * 86400
+        with self.lock, closing(self.connect()) as db:
+            db.execute("DELETE FROM requests WHERE created < ?", (cutoff,))
+            db.commit()
+
+    def usage(self):
+        """Return per-day and per-model token usage without storing request content."""
+        since = int(time.time()) - self.retention_days * 86400
+        with self.lock, closing(self.connect()) as db:
+            db.row_factory = sqlite3.Row
+            daily = db.execute("""SELECT strftime('%Y-%m-%d', created, 'unixepoch', 'localtime') day,
+                COUNT(*) requests, COALESCE(SUM(prompt_tokens),0) prompt_tokens,
+                COALESCE(SUM(completion_tokens),0) completion_tokens,
+                COALESCE(SUM(reasoning_tokens),0) reasoning_tokens
+                FROM requests WHERE created>=? GROUP BY day ORDER BY day""", (since,)).fetchall()
+            models = db.execute("""SELECT COALESCE(NULLIF(model,''),'未知模型') model, COUNT(*) requests,
+                COALESCE(SUM(prompt_tokens),0) prompt_tokens,
+                COALESCE(SUM(completion_tokens),0) completion_tokens,
+                COALESCE(SUM(reasoning_tokens),0) reasoning_tokens
+                FROM requests WHERE created>=? GROUP BY model ORDER BY (SUM(prompt_tokens)+SUM(completion_tokens)) DESC""",
+                (since,)).fetchall()
+            total = db.execute("""SELECT COUNT(*) requests, COALESCE(SUM(prompt_tokens),0) prompt_tokens,
+                COALESCE(SUM(completion_tokens),0) completion_tokens,
+                COALESCE(SUM(reasoning_tokens),0) reasoning_tokens FROM requests WHERE created>=?""",
+                (since,)).fetchone()
+        return {"retention_days": self.retention_days, "daily": [dict(row) for row in daily],
+                "models": [dict(row) for row in models], "total": dict(total), "generated_at": int(time.time())}
 
     def query(self, limit=100, offset=0, model="", ok=None):
         try:

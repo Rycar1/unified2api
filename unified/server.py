@@ -268,7 +268,9 @@ def create_app(native=None, buddy=None):
     login_owners = {}
     unified_config = UnifiedConfig(store)
     routes = RouteManager(unified_config)
-    request_log = RequestLog(store.root / "request_logs.sqlite")
+    saved_console_settings = unified_config.get("console_settings", {})
+    request_log = RequestLog(store.root / "request_logs.sqlite", saved_console_settings.get("retention_days", 365))
+    request_log.set_retention_days(saved_console_settings.get("retention_days", 365))
     backup = BackupManager({
         "management": store.root,
         "codebuddy-auth": store.auth_dir,
@@ -617,6 +619,34 @@ def create_app(native=None, buddy=None):
         store.require_admin(req)
         request_log.clear()
         return {"ok": True}
+
+    @app.get("/admin/api/unified/settings")
+    async def console_settings(req: Request):
+        store.require_admin(req)
+        saved = unified_config.get("console_settings", {})
+        return {"settings": {"retention_days": request_log.retention_days,
+                             "auto_refresh_seconds": saved.get("auto_refresh_seconds", 0)}}
+
+    @app.patch("/admin/api/unified/settings")
+    async def update_console_settings(req: Request):
+        store.require_admin(req)
+        body = await body_json(req)
+        current = unified_config.get("console_settings", {"retention_days": 365, "auto_refresh_seconds": 0})
+        retention = body.get("retention_days", current.get("retention_days", 365))
+        refresh = body.get("auto_refresh_seconds", current.get("auto_refresh_seconds", 0))
+        if retention not in (30, 90, 180, 365):
+            raise HTTPException(400, "统计保留天数只能选择 30、90、180 或 365 天")
+        if refresh not in (0, 30, 60, 300):
+            raise HTTPException(400, "自动刷新间隔只能选择关闭、30 秒、1 分钟或 5 分钟")
+        settings = {"retention_days": retention, "auto_refresh_seconds": refresh}
+        unified_config.set("console_settings", settings)
+        request_log.set_retention_days(retention)
+        return {"settings": settings}
+
+    @app.get("/admin/api/unified/usage")
+    async def usage(req: Request):
+        store.require_admin(req)
+        return request_log.usage()
 
     @app.get("/admin/api/unified/automation")
     async def automation_status(req: Request):
