@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
 
 
-ROUTE_ID = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
+ROUTE_ID = re.compile(r"^[a-z][a-z0-9_.-]{0,39}$")
 BACKUP_MAGIC = b"U2API1\0"
 MAX_BACKUP = 11 * 1024 * 1024
 
@@ -81,7 +81,7 @@ class RouteManager:
             raise HTTPException(400, "路由配置格式无效")
         rid = value.get("id", current_id)
         if not isinstance(rid, str) or not ROUTE_ID.fullmatch(rid):
-            raise HTTPException(400, "路由前缀只能使用小写字母、数字、下划线或连字符")
+            raise HTTPException(400, "路由前缀只能使用小写字母、数字、点号、下划线或连字符")
         name = value.get("name", rid)
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
             raise HTTPException(400, "路由名称需要 1–60 个字符")

@@ -268,6 +268,19 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"first", b"".join(received))
         self.assertTrue(stream.closed)
 
+    async def test_dotted_route_prefix_through_admin_api(self):
+        await self.add()
+        route = {"id": "glm-5.3", "name": "Versioned", "targets": ["myapi/org/model"],
+                 "strategy": "priority", "retries": 0, "cooldown_seconds": 60}
+        created = await self.client.post("/admin/api/unified/routes", headers=self.csrf, json=route)
+        self.assertEqual(created.status_code, 200, created.text)
+        models = (await self.client.get("/v1/models", headers=self.api_headers)).json()["data"]
+        self.assertIn("route/glm-5.3", {item["id"] for item in models})
+        edited = await self.client.patch("/admin/api/unified/routes/glm-5.3", headers=self.csrf,
+                                         json={**route, "name": "Updated"})
+        self.assertEqual(edited.status_code, 200, edited.text)
+        self.assertEqual(edited.json()["name"], "Updated")
+
     async def test_routes_logs_automation_and_backup_admin_apis(self):
         await self.add()
         route = {"id": "stable", "name": "稳定模型", "targets": ["myapi/org/model"],

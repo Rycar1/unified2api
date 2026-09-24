@@ -62,6 +62,15 @@ class FeatureStores(unittest.TestCase):
             self.assertEqual(error.exception.status_code, status)
         self.assertEqual(routes.rows()[0]["id"], "smart")
 
+    def test_route_prefix_accepts_model_version_dot(self):
+        routes = RouteManager(self.config)
+        row = routes.save({"id": "glm-5.3", "targets": ["a/one"]}, {"a/one"})
+        self.assertEqual(row["id"], "glm-5.3")
+        self.assertEqual(routes.public_models()[0]["id"], "route/glm-5.3")
+        for bad in ("Glm-5.3", "glm/5.3", ".glm-5.3"):
+            with self.assertRaises(HTTPException):
+                routes.save({"id": bad, "targets": ["a/one"]}, {"a/one"})
+
     def test_request_log_persists_metadata_and_usage(self):
         with tempfile.TemporaryDirectory() as root:
             log = RequestLog(Path(root) / "requests.sqlite")

@@ -196,12 +196,15 @@ function AccountDialog({ csrf, onClose, onSaved }) {
   </Modal>
 }
 
-function ConnectionDialog({ csrf, onClose, onSaved }) {
-  const [form, setForm] = useState({ name: '', id: '', base_url: '', key: '', models: '' })
+function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
+  const [form, setForm] = useState(() => initialConnection ? {
+    name: initialConnection.name, id: initialConnection.id, base_url: initialConnection.base_url,
+    key: '', models: (initialConnection.models || []).join('\n'), enabled: initialConnection.enabled !== false,
+  } : { name: '', id: '', base_url: '', key: '', models: '', enabled: true })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const update = (key, value) => setForm(current => ({ ...current, [key]: value }))
-  const body = () => ({ name: form.name.trim(), id: form.id.trim(), base_url: form.base_url.trim(), key: form.key.trim(), models: form.models.split(/\r?\n/).map(v => v.trim()).filter(Boolean) })
+  const body = () => ({ name: form.name.trim(), id: form.id.trim(), base_url: form.base_url.trim(), key: form.key.trim(), models: form.models.split(/\r?\n/).map(v => v.trim()).filter(Boolean), enabled: form.enabled, ...(initialConnection ? { existing_id: initialConnection.id } : {}) })
   async function discover() {
     setBusy(true); setError('')
     try { const result = await request('unified/connections/discover', { method: 'POST', body: body(), csrf }); update('models', result.models.join('\n')) }
@@ -212,18 +215,21 @@ function ConnectionDialog({ csrf, onClose, onSaved }) {
     try {
       const value = body()
       if (!value.models.length) throw new Error('请填写至少一个模型，或先读取模型列表')
-      await request('unified/connections', { method: 'POST', body: value, csrf })
+      const path = initialConnection ? `unified/connections/${encodeURIComponent(initialConnection.id)}` : 'unified/connections'
+      await request(path, { method: initialConnection ? 'PATCH' : 'POST', body: value, csrf })
       await onSaved()
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
-  return <Modal title="添加自定义服务" subtitle="OpenAI 兼容接口" onClose={onClose}><form onSubmit={save}>
-    <div className="field-grid"><div><label>服务名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：我的模型服务"/></div><div><label>模型前缀</label><input required pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="myapi"/></div></div>
+  return <Modal title={initialConnection ? '编辑自定义服务' : '添加自定义服务'} subtitle="OpenAI 兼容接口" onClose={onClose}><form onSubmit={save}>
+    <div className="field-grid"><div><label>服务名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：我的模型服务"/></div><div><label>模型前缀</label><input required readOnly={Boolean(initialConnection)} pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="myapi"/></div></div>
+    {initialConnection && <p className="field-help">模型前缀保持不变，现有客户端仍可使用 <code>{form.id}/</code>。</p>}
     <label>Base URL</label><input type="url" required value={form.base_url} onChange={e => update('base_url', e.target.value)} placeholder="https://api.example.com/v1"/>
-    <label>API Key</label><input type="password" required value={form.key} onChange={e => update('key', e.target.value)} autoComplete="new-password" placeholder="服务商提供的 Key"/>
+    <label>API Key</label><input type="password" required={!initialConnection} value={form.key} onChange={e => update('key', e.target.value)} autoComplete="new-password" placeholder={initialConnection ? '留空则保持当前 Key' : '服务商提供的 Key'}/>
     <label>模型名称（每行一个）</label><textarea rows="5" value={form.models} onChange={e => update('models', e.target.value)} placeholder="model-name"/>
     <button className="button secondary wide" type="button" onClick={discover} disabled={busy}>读取模型列表</button>
-    {error && <p className="form-error">{error}</p>}
-    <button className="button primary wide" disabled={busy}>{busy ? '正在保存…' : '保存服务'}</button>
+    <label className="switch-row"><span><strong>启用服务</strong><small>停用后模型将从目录中隐藏</small></span><input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)}/></label>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <button className="button primary wide" disabled={busy}>{busy ? '正在保存…' : initialConnection ? '保存修改' : '保存服务'}</button>
   </form></Modal>
 }
 
@@ -436,9 +442,79 @@ function Accounts({ data, csrf, onRefresh, onAdd }) {
   </section>
 }
 
-function Connections({ data, onAdd }) {
+function ConnectionRowActions({ connection, csrf, onRefresh, onEdit, onFeedback }) {
+  const [more, setMore] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
+  const moreButton = useRef(null)
+  const menu = useRef(null)
+
+  useEffect(() => {
+    if (!more) return undefined
+    function close(event) {
+      if (!moreButton.current?.contains(event.target) && !menu.current?.contains(event.target)) setMore(false)
+    }
+    function closeForViewportChange() { setMore(false) }
+    function closeOnEscape(event) { if (event.key === 'Escape') setMore(false) }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('resize', closeForViewportChange)
+    window.addEventListener('scroll', closeForViewportChange, true)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('resize', closeForViewportChange)
+      window.removeEventListener('scroll', closeForViewportChange, true)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [more])
+
+  function toggleMore() {
+    if (!more && moreButton.current) {
+      const rect = moreButton.current.getBoundingClientRect()
+      setMenuPosition({ top: Math.min(rect.bottom + 7, window.innerHeight - 128), left: Math.max(10, rect.right - 142) })
+    }
+    setMore(value => !value)
+  }
+
+  async function toggleEnabled() {
+    setMore(false); setBusy(true)
+    try {
+      await request(`unified/connections/${encodeURIComponent(connection.id)}`, { method: 'PATCH', body: { enabled: !connection.enabled }, csrf })
+      onFeedback(connection.enabled ? '服务已停用' : '服务已启用', false)
+      await onRefresh()
+    } catch (err) { onFeedback(err.message, true) }
+    finally { setBusy(false) }
+  }
+
+  async function remove() {
+    setMore(false)
+    if (!window.confirm(`确定删除服务“${connection.name}”吗？引用它的智能路由可能无法使用。`)) return
+    setBusy(true)
+    try {
+      await request(`unified/connections/${encodeURIComponent(connection.id)}`, { method: 'DELETE', csrf })
+      onFeedback('服务已删除', false)
+      await onRefresh()
+    } catch (err) { onFeedback(err.message, true) }
+    finally { setBusy(false) }
+  }
+
+  return <>
+    <button ref={moreButton} className={`dots-action ${more ? 'active' : ''}`} onClick={toggleMore} aria-label={`管理服务 ${connection.name}`} aria-expanded={more} aria-haspopup="menu" disabled={busy}>•••</button>
+    {more && createPortal(<div ref={menu} className="account-popover connection-popover" style={menuPosition} role="menu">
+      <button role="menuitem" onClick={() => { setMore(false); onEdit(connection) }}>编辑服务</button>
+      <button role="menuitem" onClick={toggleEnabled}>{connection.enabled ? '停用服务' : '启用服务'}</button>
+      <button role="menuitem" className="danger-text" onClick={remove}>删除服务</button>
+    </div>, document.body)}
+  </>
+}
+
+function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
+  const [feedback, setFeedback] = useState(null)
   const rows = data?.connections || []
-  return <section className="content-card"><div className="section-head"><div><span className="section-label">自定义服务</span><h2>兼容 OpenAI 的接口</h2><p className="muted">使用 Base URL 与 API Key 接入其他服务。</p></div><button className="button primary" onClick={onAdd}><Plus size={15}/>添加服务</button></div><DataTable columns={['服务','模型前缀','状态','模型数','']} empty={!rows.length && '暂未添加自定义服务'}>{rows.map(item => <tr key={item.id}><td><strong>{item.name}</strong><small>{item.base_url}</small></td><td><code>{item.id}/</code></td><td><StatusBadge status={item.enabled ? 'ready' : 'paused'}/></td><td className="tabular">{item.models?.length || 0}</td><td className="row-menu"><button aria-label="服务操作">•••</button></td></tr>)}</DataTable></section>
+  return <section className="content-card"><div className="section-head"><div><span className="section-label">自定义服务</span><h2>兼容 OpenAI 的接口</h2><p className="muted">使用 Base URL 与 API Key 接入其他服务。</p></div><button className="button primary" onClick={onAdd}><Plus size={15}/>添加服务</button></div>
+    {feedback && <div className={`result-banner ${feedback.error ? 'error' : ''}`} role="status">{feedback.message}</div>}
+    <DataTable columns={['服务','模型前缀','状态','模型数','操作']} empty={!rows.length && '暂未添加自定义服务'}>{rows.map(item => <tr key={item.id}><td><strong>{item.name}</strong><small>{item.base_url}</small></td><td><code>{item.id}/</code></td><td><StatusBadge status={item.enabled ? 'ready' : 'paused'}/></td><td className="tabular">{item.models?.length || 0}</td><td className="row-menu"><ConnectionRowActions connection={item} csrf={csrf} onRefresh={onRefresh} onEdit={onEdit} onFeedback={(message, error) => setFeedback({ message, error })}/></td></tr>)}</DataTable>
+  </section>
 }
 
 function Models({ data, onNavigate }) {
@@ -564,7 +640,7 @@ function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
     catch (err) { setError(err.message) } finally { setBusy(false) }
   }
   return <Modal title={initialRoute ? '编辑智能路由' : '创建智能路由'} subtitle="模型故障转移" onClose={onClose}><form onSubmit={save}>
-    <div className="field-grid"><div><label>路由名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：稳定编程模型"/></div><div><label>调用前缀</label><input required readOnly={Boolean(initialRoute)} pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="code-stable"/></div></div>
+    <div className="field-grid"><div><label>路由名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：稳定编程模型"/></div><div><label>调用前缀</label><input required readOnly={Boolean(initialRoute)} pattern="[a-z][a-z0-9_.-]{0,39}" title="小写字母开头，可包含数字、点号、下划线和短横线" value={form.id} onChange={e => update('id', e.target.value)} placeholder="glm-5.3"/></div></div>
     {initialRoute && <p className="field-help">调用前缀保持不变，现有客户端可以继续使用 <code>route/{form.id}</code>。</p>}
     <div className="field-grid"><div><label>选择策略</label><select value={form.strategy} onChange={e => update('strategy', e.target.value)}><option value="priority">按顺序优先</option><option value="round_robin">轮询分配</option><option value="latency">优先低延迟</option></select></div><div><label>失败后最多切换</label><input type="number" min="0" max="10" value={form.retries} onChange={e => update('retries', Number(e.target.value))}/></div></div>
     <label>失败冷却时间（秒）</label><input type="number" min="10" max="86400" value={form.cooldown_seconds} onChange={e => update('cooldown_seconds', Number(e.target.value))}/>
@@ -916,6 +992,7 @@ function App() {
   const [authenticated, setAuthenticated] = useState(true)
   const [drawer, setDrawer] = useState(false)
   const [dialog, setDialog] = useState(null)
+  const [editingConnection, setEditingConnection] = useState(null)
   const [editingRoute, setEditingRoute] = useState(null)
   const [consoleSettings, setConsoleSettings] = useState({ retention_days: 365, auto_refresh_seconds: 0 })
   const [theme, setTheme] = useState(() => window.localStorage.getItem('unified-theme') || 'light')
@@ -956,7 +1033,7 @@ function App() {
   const pages = {
     overview: <Overview data={data} onNavigate={navigate}/>,
     accounts: <Accounts data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('account')}/>,
-    connections: <Connections data={data} onAdd={() => setDialog('connection')}/>,
+    connections: <Connections data={data} csrf={csrf} onRefresh={load} onAdd={() => { setEditingConnection(null); setDialog('connection') }} onEdit={connection => { setEditingConnection(connection); setDialog('connection') }}/>,
     models: <Models data={data} onNavigate={navigate}/>,
     keys: <Keys data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('key')}/>,
     test: <TestPanel data={data} csrf={csrf}/>,
@@ -987,7 +1064,7 @@ function App() {
       <AccountDialog csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved()}/>
     )}
     {dialog === 'connection' && (
-      <ConnectionDialog csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved()}/>
+      <ConnectionDialog key={editingConnection?.id || 'new'} csrf={csrf} initialConnection={editingConnection} onClose={() => setDialog(null)} onSaved={() => saved()}/>
     )}
     {dialog === 'key' && (
       <KeyDialog csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved(true)}/>
