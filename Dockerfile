@@ -8,7 +8,7 @@ RUN go mod tidy && CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -o /libt
 FROM python:3.12-slim-bookworm
 WORKDIR /app
 COPY vendor/codebuddy2api/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN PIP_CONFIG_FILE=/dev/null PIP_INDEX_URL=https://pypi.org/simple pip install --no-cache-dir -r requirements.txt
 COPY vendor/codebuddy2api/core ./core
 COPY vendor/codebuddy2api/admin ./admin
 COPY unified ./unified
