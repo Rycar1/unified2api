@@ -41,6 +41,27 @@ class FeatureStores(unittest.TestCase):
         with self.assertRaises(HTTPException):
             routes.save({"id": "loop", "targets": ["route/smart"]}, {"route/smart"})
 
+    def test_edit_route_keeps_id_and_target_order(self):
+        routes = RouteManager(self.config)
+        available = {"a/one", "b/two"}
+        routes.save({"id": "smart", "name": "Old", "targets": ["a/one", "b/two"]}, available)
+        updated = routes.save({"id": "smart", "name": "New", "targets": ["b/two", "a/one"],
+                               "strategy": "round_robin", "retries": 1, "cooldown_seconds": 90,
+                               "enabled": False}, available, "smart")
+        self.assertEqual(updated["targets"], ["b/two", "a/one"])
+        self.assertEqual(updated["name"], "New")
+        self.assertFalse(updated["enabled"])
+        self.assertEqual(len(routes.rows()), 1)
+        self.assertEqual(routes.public_models(), [])
+        for body, current_id, status in [
+            ({"id": "other", "targets": ["a/one"]}, "smart", 400),
+            ({"id": "missing", "targets": ["a/one"]}, "missing", 404),
+        ]:
+            with self.assertRaises(HTTPException) as error:
+                routes.save(body, available, current_id)
+            self.assertEqual(error.exception.status_code, status)
+        self.assertEqual(routes.rows()[0]["id"], "smart")
+
     def test_request_log_persists_metadata_and_usage(self):
         with tempfile.TemporaryDirectory() as root:
             log = RequestLog(Path(root) / "requests.sqlite")

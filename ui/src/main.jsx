@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import {
   Activity, Blocks, Bot, Check, ChevronDown, CircleGauge, Copy, Database, ExternalLink, Moon, Sun,
   Archive, Clock, Download, FileText, FlaskConical, KeyRound, LogOut, Menu, Network,
-  Play, Plus, RefreshCw, Save, Search, Server, Settings2, Trash2, Upload, Users,
+  Pencil, Play, Plus, RefreshCw, Save, Search, Server, Settings2, Trash2, Upload, Users,
   WalletCards, X,
 } from 'lucide-react'
 import './styles.css'
@@ -532,34 +532,53 @@ function Keys({ data, csrf, onRefresh, onAdd }) {
   </section>
 }
 
-function RouteDialog({ data, csrf, onClose, onSaved }) {
+function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
   const models = (data?.models || []).filter(model => !model.id.startsWith('route/'))
   const [modelQuery, setModelQuery] = useState('')
   const visibleModels = models.filter(model => model.id.toLowerCase().includes(modelQuery.trim().toLowerCase()))
-  const [form, setForm] = useState({ id: '', name: '', strategy: 'priority', retries: 2, cooldown_seconds: 300, targets: [] })
+  const [form, setForm] = useState(() => initialRoute ? {
+    id: initialRoute.id, name: initialRoute.name, strategy: initialRoute.strategy,
+    retries: initialRoute.retries, cooldown_seconds: initialRoute.cooldown_seconds,
+    targets: [...initialRoute.targets], enabled: initialRoute.enabled !== false,
+  } : { id: '', name: '', strategy: 'priority', retries: 2, cooldown_seconds: 300, targets: [], enabled: true })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const update = (key, value) => setForm(current => ({ ...current, [key]: value }))
   const toggle = model => update('targets', form.targets.includes(model) ? form.targets.filter(item => item !== model) : [...form.targets, model])
+  const moveTarget = (index, direction) => setForm(current => {
+    const next = [...current.targets]
+    const other = index + direction
+    if (other < 0 || other >= next.length) return current
+    const moved = next[index]
+    next[index] = next[other]
+    next[other] = moved
+    return { ...current, targets: next }
+  })
   async function save(event) {
     event.preventDefault(); setBusy(true); setError('')
-    try { await request('unified/routes', { method: 'POST', body: form, csrf }); await onSaved() }
+    try {
+      const path = initialRoute ? `unified/routes/${encodeURIComponent(initialRoute.id)}` : 'unified/routes'
+      await request(path, { method: initialRoute ? 'PATCH' : 'POST', body: form, csrf })
+      await onSaved()
+    }
     catch (err) { setError(err.message) } finally { setBusy(false) }
   }
-  return <Modal title="创建智能路由" subtitle="模型故障转移" onClose={onClose}><form onSubmit={save}>
-    <div className="field-grid"><div><label>路由名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：稳定编程模型"/></div><div><label>调用前缀</label><input required pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="code-stable"/></div></div>
+  return <Modal title={initialRoute ? '编辑智能路由' : '创建智能路由'} subtitle="模型故障转移" onClose={onClose}><form onSubmit={save}>
+    <div className="field-grid"><div><label>路由名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：稳定编程模型"/></div><div><label>调用前缀</label><input required readOnly={Boolean(initialRoute)} pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="code-stable"/></div></div>
+    {initialRoute && <p className="field-help">调用前缀保持不变，现有客户端可以继续使用 <code>route/{form.id}</code>。</p>}
     <div className="field-grid"><div><label>选择策略</label><select value={form.strategy} onChange={e => update('strategy', e.target.value)}><option value="priority">按顺序优先</option><option value="round_robin">轮询分配</option><option value="latency">优先低延迟</option></select></div><div><label>失败后最多切换</label><input type="number" min="0" max="10" value={form.retries} onChange={e => update('retries', Number(e.target.value))}/></div></div>
     <label>失败冷却时间（秒）</label><input type="number" min="10" max="86400" value={form.cooldown_seconds} onChange={e => update('cooldown_seconds', Number(e.target.value))}/>
     <label htmlFor="route-model-search">目标模型（按选择顺序）</label>
     <div className="model-picker-search"><Search size={15}/><input id="route-model-search" type="search" value={modelQuery} onChange={event => setModelQuery(event.target.value)} placeholder="输入模型名称快速筛选" autoComplete="off"/></div>
     <div className="model-picker">{visibleModels.length ? visibleModels.map(model => <label key={model.id} className={form.targets.includes(model.id) ? 'selected' : ''}><input type="checkbox" checked={form.targets.includes(model.id)} onChange={() => toggle(model.id)}/><code>{model.id}</code></label>) : <p className="model-picker-empty">没有匹配的模型</p>}</div>
-    {form.targets.length > 0 && <p className="field-help">已选 {form.targets.length} 个：{form.targets.join(' → ')}</p>}
+    {form.targets.length > 0 && <div className="route-target-order" aria-label="目标模型顺序">{form.targets.map((target, index) => <div key={target}><span>{index + 1}</span><code title={target}>{target}</code><button type="button" onClick={() => moveTarget(index, -1)} disabled={index === 0} aria-label={`上移 ${target}`}>↑</button><button type="button" onClick={() => moveTarget(index, 1)} disabled={index === form.targets.length - 1} aria-label={`下移 ${target}`}>↓</button></div>)}</div>}
+    <label className="switch-row"><span><strong>启用路由</strong><small>停用后，客户端将无法调用这个路由</small></span><input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)}/></label>
     <p className="field-help">客户端使用 <code>route/{form.id || '路由前缀'}</code>。上游失败时会按策略自动尝试下一个目标。</p>
-    {error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy || !form.targets.length}>{busy ? '正在保存…' : '创建路由'}</button>
+    {error && <p className="form-error" role="alert">{error}</p>}<button className="button primary wide" disabled={busy || !form.targets.length}>{busy ? '正在保存…' : initialRoute ? '保存修改' : '创建路由'}</button>
   </form></Modal>
 }
 
-function Routes({ data, csrf, onRefresh, onAdd }) {
+function Routes({ data, csrf, onRefresh, onAdd, onEdit }) {
   const rows = data?.routes || []
   const [message, setMessage] = useState('')
   async function remove(id) {
@@ -572,7 +591,7 @@ function Routes({ data, csrf, onRefresh, onAdd }) {
     <section className="content-card"><div className="section-head"><div><span className="section-label">统一入口</span><h2>智能路由</h2><p className="muted">为多个真实模型创建一个稳定别名，并在失败时自动切换。</p></div><button className="button primary" onClick={onAdd}><Plus size={15}/>创建路由</button></div>
       <DataTable columns={['路由','策略','目标模型','健康状态','']} empty={!rows.length && '暂未创建智能路由'}>{rows.map(route => {
         const cooling = Object.values(route.health || {}).filter(item => item.cooldown_until * 1000 > Date.now()).length
-        return <tr key={route.id}><td><strong>{route.name}</strong><small><code>route/{route.id}</code></small></td><td>{({priority:'顺序优先',round_robin:'轮询',latency:'低延迟'}[route.strategy])}</td><td><strong>{route.targets.length} 个</strong><small>{route.targets.join(' → ')}</small></td><td><StatusBadge status={cooling ? 'cooling' : 'ready'}/><small>{cooling ? `${cooling} 个目标冷却中` : '全部可参与路由'}</small></td><td className="row-menu"><button className="danger-icon" onClick={() => remove(route.id)} aria-label="删除路由"><Trash2 size={14}/></button></td></tr>
+        return <tr key={route.id}><td><strong>{route.name}</strong><small><code>route/{route.id}</code></small></td><td>{({priority:'顺序优先',round_robin:'轮询',latency:'低延迟'}[route.strategy])}</td><td><strong>{route.targets.length} 个</strong><small>{route.targets.join(' → ')}</small></td><td><StatusBadge status={route.enabled === false ? 'paused' : cooling ? 'cooling' : 'ready'}/><small>{route.enabled === false ? '路由已停用' : cooling ? `${cooling} 个目标冷却中` : '全部可参与路由'}</small></td><td className="row-menu"><div className="route-row-actions"><button type="button" onClick={() => onEdit(route)} aria-label={`编辑路由 ${route.name}`} title="编辑路由"><Pencil size={14}/></button><button type="button" className="danger-icon" onClick={() => remove(route.id)} aria-label={`删除路由 ${route.name}`} title="删除路由"><Trash2 size={14}/></button></div></td></tr>
       })}</DataTable>
     </section>
   </div>
@@ -897,6 +916,7 @@ function App() {
   const [authenticated, setAuthenticated] = useState(true)
   const [drawer, setDrawer] = useState(false)
   const [dialog, setDialog] = useState(null)
+  const [editingRoute, setEditingRoute] = useState(null)
   const [consoleSettings, setConsoleSettings] = useState({ retention_days: 365, auto_refresh_seconds: 0 })
   const [theme, setTheme] = useState(() => window.localStorage.getItem('unified-theme') || 'light')
   const [refreshNonce, setRefreshNonce] = useState(0)
@@ -940,7 +960,7 @@ function App() {
     models: <Models data={data} onNavigate={navigate}/>,
     keys: <Keys data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('key')}/>,
     test: <TestPanel data={data} csrf={csrf}/>,
-    routes: <Routes data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('route')}/>,
+    routes: <Routes data={data} csrf={csrf} onRefresh={load} onAdd={() => { setEditingRoute(null); setDialog('route') }} onEdit={route => { setEditingRoute(route); setDialog('route') }}/>,
     logs: <Logs csrf={csrf}/>,
     automation: <Automation data={data} csrf={csrf} onRefresh={load}/>,
     backup: <Backup csrf={csrf}/>,
@@ -973,7 +993,7 @@ function App() {
       <KeyDialog csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved(true)}/>
     )}
     {dialog === 'route' && (
-      <RouteDialog data={data} csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved()}/>
+      <RouteDialog key={editingRoute?.id || 'new'} data={data} csrf={csrf} initialRoute={editingRoute} onClose={() => setDialog(null)} onSaved={() => saved()}/>
     )}
   </div>
 }

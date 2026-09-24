@@ -109,10 +109,16 @@ class RouteManager:
         route = self.validate(value, existing_models, current_id)
         routes = self.config.get("routes", [])
         if current_id:
-            routes = [item for item in routes if item["id"] != current_id]
+            if route["id"] != current_id:
+                raise HTTPException(400, "调用前缀不可修改，请创建新路由")
+            index = next((i for i, item in enumerate(routes) if item["id"] == current_id), None)
+            if index is None:
+                raise HTTPException(404, "路由不存在")
+            routes[index] = route
         elif any(item["id"] == route["id"] for item in routes):
             raise HTTPException(409, "路由前缀已存在")
-        routes.append(route)
+        else:
+            routes.append(route)
         self.config.set("routes", routes)
         return route
 
