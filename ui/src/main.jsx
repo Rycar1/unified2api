@@ -534,6 +534,8 @@ function Keys({ data, csrf, onRefresh, onAdd }) {
 
 function RouteDialog({ data, csrf, onClose, onSaved }) {
   const models = (data?.models || []).filter(model => !model.id.startsWith('route/'))
+  const [modelQuery, setModelQuery] = useState('')
+  const visibleModels = models.filter(model => model.id.toLowerCase().includes(modelQuery.trim().toLowerCase()))
   const [form, setForm] = useState({ id: '', name: '', strategy: 'priority', retries: 2, cooldown_seconds: 300, targets: [] })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -548,7 +550,10 @@ function RouteDialog({ data, csrf, onClose, onSaved }) {
     <div className="field-grid"><div><label>路由名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：稳定编程模型"/></div><div><label>调用前缀</label><input required pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="code-stable"/></div></div>
     <div className="field-grid"><div><label>选择策略</label><select value={form.strategy} onChange={e => update('strategy', e.target.value)}><option value="priority">按顺序优先</option><option value="round_robin">轮询分配</option><option value="latency">优先低延迟</option></select></div><div><label>失败后最多切换</label><input type="number" min="0" max="10" value={form.retries} onChange={e => update('retries', Number(e.target.value))}/></div></div>
     <label>失败冷却时间（秒）</label><input type="number" min="10" max="86400" value={form.cooldown_seconds} onChange={e => update('cooldown_seconds', Number(e.target.value))}/>
-    <label>目标模型（按选择顺序）</label><div className="model-picker">{models.map(model => <label key={model.id} className={form.targets.includes(model.id) ? 'selected' : ''}><input type="checkbox" checked={form.targets.includes(model.id)} onChange={() => toggle(model.id)}/><code>{model.id}</code></label>)}</div>
+    <label htmlFor="route-model-search">目标模型（按选择顺序）</label>
+    <div className="model-picker-search"><Search size={15}/><input id="route-model-search" type="search" value={modelQuery} onChange={event => setModelQuery(event.target.value)} placeholder="输入模型名称快速筛选" autoComplete="off"/></div>
+    <div className="model-picker">{visibleModels.length ? visibleModels.map(model => <label key={model.id} className={form.targets.includes(model.id) ? 'selected' : ''}><input type="checkbox" checked={form.targets.includes(model.id)} onChange={() => toggle(model.id)}/><code>{model.id}</code></label>) : <p className="model-picker-empty">没有匹配的模型</p>}</div>
+    {form.targets.length > 0 && <p className="field-help">已选 {form.targets.length} 个：{form.targets.join(' → ')}</p>}
     <p className="field-help">客户端使用 <code>route/{form.id || '路由前缀'}</code>。上游失败时会按策略自动尝试下一个目标。</p>
     {error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy || !form.targets.length}>{busy ? '正在保存…' : '创建路由'}</button>
   </form></Modal>
@@ -848,6 +853,7 @@ function Backup({ csrf }) {
 }
 
 function TestPanel({ data, csrf }) {
+  const models = (data?.models || []).map(item => item.id)
   const [model, setModel] = useState('')
   const [message, setMessage] = useState('请只回复：连接成功')
   const [output, setOutput] = useState('')
@@ -855,6 +861,7 @@ function TestPanel({ data, csrf }) {
   const [busy, setBusy] = useState(false)
   async function submit(event) {
     event.preventDefault()
+    if (!models.includes(model)) { setFailed(true); setOutput('请从建议列表中选择有效模型'); return }
     setBusy(true); setFailed(false); setOutput('正在等待上游响应…')
     try {
       const result = await request('unified/test', { method: 'POST', body: { model, message }, csrf })
@@ -869,10 +876,8 @@ function TestPanel({ data, csrf }) {
     <form className="content-card" onSubmit={submit}>
       <span className="section-label">请求</span><h2>调用测试</h2>
       <label htmlFor="test-model">模型</label>
-      <select id="test-model" value={model} onChange={e => setModel(e.target.value)} required>
-        <option value="" disabled>选择模型</option>
-        {(data?.models || []).map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
-      </select>
+      <input id="test-model" list="test-model-options" value={model} onChange={e => setModel(e.target.value)} placeholder="输入模型名称搜索" autoComplete="off" required/>
+      <datalist id="test-model-options">{models.map(id => <option key={id} value={id}/>)}</datalist>
       <label htmlFor="test-message">消息</label>
       <textarea id="test-message" rows="7" value={message} onChange={e => setMessage(e.target.value)} maxLength="16000" required/>
       <button className="button primary wide" disabled={busy}>{busy ? '正在调用…' : '发送请求'}</button>
