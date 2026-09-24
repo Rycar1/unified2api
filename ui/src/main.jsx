@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import {
   Activity, Blocks, Bot, Check, ChevronDown, CircleGauge, Copy, Database, ExternalLink,
-  FlaskConical, KeyRound, LogOut, Menu, Plus, RefreshCw,
-  Search, Server, Settings2, Users, WalletCards, X,
+  Archive, Clock, Download, FileText, FlaskConical, KeyRound, LogOut, Menu, Network,
+  Play, Plus, RefreshCw, Save, Search, Server, Settings2, Trash2, Upload, Users,
+  WalletCards, X,
 } from 'lucide-react'
 import './styles.css'
 
@@ -15,14 +16,19 @@ const pageMeta = {
   models: ['模型', '查看当前可以调用的模型'],
   keys: ['API 密钥', '管理客户端访问凭据'],
   test: ['调用测试', '快速验证模型连接'],
+  routes: ['智能路由', '设置模型别名、策略与自动故障转移'],
+  logs: ['调用记录', '查看成功率、耗时和 Token 使用'],
+  automation: ['自动任务', '定时签到、刷新余额和发送告警'],
+  backup: ['备份恢复', '导出或恢复加密的完整服务数据'],
 }
 
 const navGroups = [
   { label: '工作台', items: [['overview', CircleGauge], ['accounts', Users], ['connections', Server], ['models', Bot]] },
-  { label: '开发', items: [['keys', KeyRound], ['test', FlaskConical]] },
+  { label: '开发', items: [['keys', KeyRound], ['test', FlaskConical], ['routes', Network]] },
+  { label: '运维', items: [['logs', FileText], ['automation', Clock], ['backup', Archive]] },
 ]
 
-const providerName = id => ({ trae: 'TRAE', codebuddy: 'CodeBuddy', monkeycode: 'MonkeyCode' }[id] || id)
+const providerName = id => ({ trae: 'TRAE', codebuddy: 'CodeBuddy', monkeycode: 'MonkeyCode', route: '智能路由' }[id] || id)
 const statusName = value => ({ ready: '可用', available: '可用', paused: '已暂停', cooling: '冷却中', invalid: '凭据异常', exhausted: '额度耗尽', expired: '已过期', error: '异常' }[value] || value || '可用')
 
 async function request(path, { method = 'GET', body, csrf = '' } = {}) {
@@ -444,6 +450,132 @@ function Keys({ data, onAdd }) {
   return <section className="content-card"><div className="section-head"><div><span className="section-label">访问控制</span><h2>API 密钥</h2></div><button className="button primary" onClick={onAdd}><Plus size={15}/>创建密钥</button></div><DataTable columns={['名称','前缀','创建时间','']} empty={!rows.length && '暂未创建 API 密钥'}>{rows.map(k => <tr key={k.id}><td><strong>{k.name}</strong></td><td><code>{k.prefix || '已隐藏'}…</code></td><td className="muted">{k.created ? new Date(k.created * 1000).toLocaleDateString('zh-CN') : '—'}</td><td className="row-menu"><button>•••</button></td></tr>)}</DataTable></section>
 }
 
+function RouteDialog({ data, csrf, onClose, onSaved }) {
+  const models = (data?.models || []).filter(model => !model.id.startsWith('route/'))
+  const [form, setForm] = useState({ id: '', name: '', strategy: 'priority', retries: 2, cooldown_seconds: 300, targets: [] })
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const update = (key, value) => setForm(current => ({ ...current, [key]: value }))
+  const toggle = model => update('targets', form.targets.includes(model) ? form.targets.filter(item => item !== model) : [...form.targets, model])
+  async function save(event) {
+    event.preventDefault(); setBusy(true); setError('')
+    try { await request('unified/routes', { method: 'POST', body: form, csrf }); await onSaved() }
+    catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+  return <Modal title="创建智能路由" subtitle="模型故障转移" onClose={onClose}><form onSubmit={save}>
+    <div className="field-grid"><div><label>路由名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：稳定编程模型"/></div><div><label>调用前缀</label><input required pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="code-stable"/></div></div>
+    <div className="field-grid"><div><label>选择策略</label><select value={form.strategy} onChange={e => update('strategy', e.target.value)}><option value="priority">按顺序优先</option><option value="round_robin">轮询分配</option><option value="latency">优先低延迟</option></select></div><div><label>失败后最多切换</label><input type="number" min="0" max="10" value={form.retries} onChange={e => update('retries', Number(e.target.value))}/></div></div>
+    <label>失败冷却时间（秒）</label><input type="number" min="10" max="86400" value={form.cooldown_seconds} onChange={e => update('cooldown_seconds', Number(e.target.value))}/>
+    <label>目标模型（按选择顺序）</label><div className="model-picker">{models.map(model => <label key={model.id} className={form.targets.includes(model.id) ? 'selected' : ''}><input type="checkbox" checked={form.targets.includes(model.id)} onChange={() => toggle(model.id)}/><code>{model.id}</code></label>)}</div>
+    <p className="field-help">客户端使用 <code>route/{form.id || '路由前缀'}</code>。上游失败时会按策略自动尝试下一个目标。</p>
+    {error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy || !form.targets.length}>{busy ? '正在保存…' : '创建路由'}</button>
+  </form></Modal>
+}
+
+function Routes({ data, csrf, onRefresh, onAdd }) {
+  const rows = data?.routes || []
+  const [message, setMessage] = useState('')
+  async function remove(id) {
+    if (!window.confirm(`删除路由 route/${id}？`)) return
+    try { await request(`unified/routes/${encodeURIComponent(id)}`, { method: 'DELETE', body: {}, csrf }); setMessage('路由已删除'); await onRefresh() }
+    catch (err) { setMessage(err.message) }
+  }
+  return <div className="stack">
+    {message && <div className="result-banner">{message}</div>}
+    <section className="content-card"><div className="section-head"><div><span className="section-label">统一入口</span><h2>智能路由</h2><p className="muted">为多个真实模型创建一个稳定别名，并在失败时自动切换。</p></div><button className="button primary" onClick={onAdd}><Plus size={15}/>创建路由</button></div>
+      <DataTable columns={['路由','策略','目标模型','健康状态','']} empty={!rows.length && '暂未创建智能路由'}>{rows.map(route => {
+        const cooling = Object.values(route.health || {}).filter(item => item.cooldown_until * 1000 > Date.now()).length
+        return <tr key={route.id}><td><strong>{route.name}</strong><small><code>route/{route.id}</code></small></td><td>{({priority:'顺序优先',round_robin:'轮询',latency:'低延迟'}[route.strategy])}</td><td><strong>{route.targets.length} 个</strong><small>{route.targets.join(' → ')}</small></td><td><StatusBadge status={cooling ? 'cooling' : 'ready'}/><small>{cooling ? `${cooling} 个目标冷却中` : '全部可参与路由'}</small></td><td className="row-menu"><button className="danger-icon" onClick={() => remove(route.id)} aria-label="删除路由"><Trash2 size={14}/></button></td></tr>
+      })}</DataTable>
+    </section>
+  </div>
+}
+
+function Logs({ csrf }) {
+  const [state, setState] = useState({ items: [], total: 0, summary: {} })
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('')
+  async function load() {
+    setLoading(true)
+    try { setState(await request(`unified/logs?limit=100&model=${encodeURIComponent(filter)}`)) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+  async function clear() {
+    if (!window.confirm('清空全部调用记录？')) return
+    await request('unified/logs', { method: 'DELETE', body: {}, csrf }); await load()
+  }
+  const summary = state.summary || {}
+  return <div className="stack">
+    <section className="summary-grid compact-summary">
+      {[['24 小时请求', summary.count || 0], ['成功率', summary.success_rate == null ? '—' : `${summary.success_rate}%`], ['平均耗时', summary.avg_duration_ms ? `${Math.round(summary.avg_duration_ms)} ms` : '—'], ['推理 Token', (summary.reasoning_tokens || 0).toLocaleString()]].map(([label,value]) => <article className="summary-card" key={label}><div><strong>{value}</strong><span>{label}</span></div></article>)}
+    </section>
+    <section className="content-card"><div className="section-head"><div><span className="section-label">最近 90 天</span><h2>调用记录</h2><p className="muted">不保存提示词、回复正文或密钥。</p></div><div className="head-actions"><button className="button secondary" onClick={clear}><Trash2 size={14}/>清空</button><button className="button secondary" onClick={load}><RefreshCw size={14} className={loading ? 'spin' : ''}/>刷新</button></div></div>
+      <div className="toolbar"><label className="search-box"><Search size={15}/><input value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()} placeholder="筛选模型"/></label><span className="muted">共 {state.total || 0} 条</span></div>
+      <DataTable columns={['时间','模型','实际目标','结果','耗时','Token']} empty={!state.items.length && '暂无调用记录'}>{state.items.map(item => <tr key={item.id}><td className="muted">{new Date(item.created * 1000).toLocaleString('zh-CN')}</td><td><code>{item.model || '—'}</code></td><td><small>{item.resolved_model || '—'}</small></td><td><StatusBadge status={item.ok ? 'ready' : 'error'}/><small>{item.status || item.outcome}</small></td><td className="tabular">{item.duration_ms.toLocaleString()} ms</td><td><strong>{(item.prompt_tokens + item.completion_tokens).toLocaleString()}</strong><small>推理 {item.reasoning_tokens.toLocaleString()}</small></td></tr>)}</DataTable>
+    </section>
+  </div>
+}
+
+function Automation({ data, csrf, onRefresh }) {
+  const initial = data?.automation || {}
+  const [form, setForm] = useState(initial)
+  const [busy, setBusy] = useState('')
+  const [message, setMessage] = useState('')
+  useEffect(() => setForm(initial), [data])
+  const update = (key, value) => setForm(current => ({ ...current, [key]: value }))
+  async function save(event) {
+    event.preventDefault(); setBusy('save'); setMessage('')
+    try { await request('unified/automation', { method: 'PATCH', body: form, csrf }); setMessage('自动任务设置已保存'); await onRefresh() }
+    catch (err) { setMessage(err.message) } finally { setBusy('') }
+  }
+  async function run(action) {
+    setBusy(action); setMessage('')
+    try { const result = await request(`unified/automation/run/${action}`, { method: 'POST', body: {}, csrf }); const sum = result.result?.summary || {}; setMessage(`${action === 'checkin' ? '签到' : '刷新'}完成：成功 ${sum.succeeded || 0}，失败 ${sum.failed || 0}`); await onRefresh() }
+    catch (err) { setMessage(err.message) } finally { setBusy('') }
+  }
+  return <div className="settings-grid">
+    <form className="content-card" onSubmit={save}><span className="section-label">计划任务</span><h2>签到与余额刷新</h2>
+      <label className="switch-row"><span><strong>每日自动签到</strong><small>按服务器所在时区执行</small></span><input type="checkbox" checked={Boolean(form.auto_checkin)} onChange={e => update('auto_checkin', e.target.checked)}/></label>
+      <label>每日签到时间</label><input type="time" value={form.checkin_time || '09:00'} onChange={e => update('checkin_time', e.target.value)}/>
+      <label className="switch-row"><span><strong>自动刷新状态与余额</strong><small>同步凭据状态并查询最新额度</small></span><input type="checkbox" checked={Boolean(form.auto_refresh)} onChange={e => update('auto_refresh', e.target.checked)}/></label>
+      <label>刷新间隔（分钟）</label><input type="number" min="5" max="1440" value={form.refresh_minutes || 30} onChange={e => update('refresh_minutes', Number(e.target.value))}/>
+      <button className="button primary wide" disabled={Boolean(busy)}><Save size={15}/>{busy === 'save' ? '正在保存…' : '保存设置'}</button>
+    </form>
+    <section className="content-card"><span className="section-label">告警</span><h2>Webhook 通知</h2><label>Webhook 地址</label><input type="url" value={form.webhook_url || ''} onChange={e => update('webhook_url', e.target.value)} placeholder="https://example.com/webhook"/><label>低余额阈值</label><input type="number" min="0" step="0.01" value={form.low_balance || 0} onChange={e => update('low_balance', Number(e.target.value))}/><label className="switch-row"><span><strong>任务失败时通知</strong><small>只发送账号 ID、状态和余额，不发送凭据</small></span><input type="checkbox" checked={form.notify_failures !== false} onChange={e => update('notify_failures', e.target.checked)}/></label><div className="inline-actions"><button className="button secondary" onClick={() => run('checkin')} disabled={Boolean(busy)}><Play size={14}/>{busy === 'checkin' ? '执行中…' : '立即签到'}</button><button className="button secondary" onClick={() => run('refresh')} disabled={Boolean(busy)}><RefreshCw size={14} className={busy === 'refresh' ? 'spin' : ''}/>{busy === 'refresh' ? '执行中…' : '立即刷新'}</button></div></section>
+    {message && <div className="result-banner settings-message">{message}</div>}
+    <section className="content-card settings-wide"><div className="section-head"><div><span className="section-label">执行历史</span><h2>最近自动任务</h2></div></div><DataTable columns={['时间','任务','触发方式','结果']} empty={!data?.automation_history?.length && '还没有执行记录'}>{(data?.automation_history || []).map((item,index) => <tr key={`${item.time}-${index}`}><td>{new Date(item.time * 1000).toLocaleString('zh-CN')}</td><td>{item.action === 'checkin' ? '签到' : '刷新'}</td><td>{item.manual ? '手动' : '自动'}</td><td><StatusBadge status={item.ok ? 'ready' : 'error'}/><small>{item.summary ? `成功 ${item.summary.succeeded || 0} / 失败 ${item.summary.failed || 0}` : item.error}</small></td></tr>)}</DataTable></section>
+  </div>
+}
+
+function Backup({ csrf }) {
+  const [password, setPassword] = useState('')
+  const [includeLogs, setIncludeLogs] = useState(false)
+  const [file, setFile] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [message, setMessage] = useState('')
+  async function exportData() {
+    setBusy('export'); setMessage('')
+    try {
+      const response = await fetch('/admin/api/unified/backup/export', { method: 'POST', credentials: 'same-origin', headers: {'Content-Type':'application/json','X-CSRF-Token':csrf}, body: JSON.stringify({ password, include_logs: includeLogs }) })
+      if (!response.ok) { const value = await response.json().catch(() => ({})); throw new Error(value.detail || '导出失败') }
+      const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `unified2api-${new Date().toISOString().slice(0,10)}.ubak`; link.click(); URL.revokeObjectURL(url); setMessage('加密备份已下载')
+    } catch (err) { setMessage(err.message) } finally { setBusy('') }
+  }
+  async function importData() {
+    if (!file || !window.confirm('恢复会替换当前账号和设置，服务随后会自动重启。继续吗？')) return
+    setBusy('import'); setMessage('正在校验并恢复备份…')
+    try {
+      const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file) })
+      const result = await request('unified/backup/import', { method: 'POST', body: { password, data: String(dataUrl).split(',')[1] }, csrf })
+      setMessage(result.restarting ? '恢复成功，服务正在重启，请稍后刷新页面' : '恢复成功，请重启服务后使用')
+    } catch (err) { setMessage(err.message) } finally { setBusy('') }
+  }
+  return <div className="settings-grid"><section className="content-card"><span className="section-label">导出</span><h2>创建加密备份</h2><p className="muted backup-copy">包含 TRAE、CodeBuddy、MonkeyCode 账号、自定义服务、路由和自动任务设置。</p><label>备份密码</label><input type="password" minLength="8" value={password} onChange={e => setPassword(e.target.value)} placeholder="至少 8 个字符"/><label className="switch-row"><span><strong>包含调用记录</strong><small>可能明显增大备份文件</small></span><input type="checkbox" checked={includeLogs} onChange={e => setIncludeLogs(e.target.checked)}/></label><button className="button primary wide" onClick={exportData} disabled={busy || password.length < 8}><Download size={15}/>{busy === 'export' ? '正在打包…' : '下载加密备份'}</button></section>
+    <section className="content-card"><span className="section-label">恢复</span><h2>导入备份</h2><p className="muted backup-copy">仅接受 Unified2API 的 <code>.ubak</code> 加密文件。恢复成功后容器自动重启。</p><label>备份文件</label><input type="file" accept=".ubak,application/octet-stream" onChange={e => setFile(e.target.files?.[0] || null)}/><label>备份密码</label><input type="password" minLength="8" value={password} onChange={e => setPassword(e.target.value)} placeholder="创建备份时使用的密码"/><button className="button secondary wide" onClick={importData} disabled={busy || !file || password.length < 8}><Upload size={15}/>{busy === 'import' ? '正在恢复…' : '恢复并重启服务'}</button></section>
+    {message && <div className="result-banner settings-message">{message}</div>}
+  </div>
+}
+
 function TestPanel({ data, csrf }) {
   const [model, setModel] = useState('')
   const [message, setMessage] = useState('请只回复：连接成功')
@@ -508,7 +640,19 @@ function App() {
   if (loading && !data) return <div className="boot"><RefreshCw className="spin" size={20}/><span>正在连接控制台</span></div>
   if (!authenticated) return <Login onLogin={login}/>
   const [title, description] = pageMeta[page]
-  const content = page === 'overview' ? <Overview data={data} onNavigate={navigate}/> : page === 'accounts' ? <Accounts data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('account')}/> : page === 'connections' ? <Connections data={data} onAdd={() => setDialog('connection')}/> : page === 'models' ? <Models data={data} onNavigate={navigate}/> : page === 'keys' ? <Keys data={data} onAdd={() => setDialog('key')}/> : <TestPanel data={data} csrf={csrf}/>
+  const pages = {
+    overview: <Overview data={data} onNavigate={navigate}/>,
+    accounts: <Accounts data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('account')}/>,
+    connections: <Connections data={data} onAdd={() => setDialog('connection')}/>,
+    models: <Models data={data} onNavigate={navigate}/>,
+    keys: <Keys data={data} onAdd={() => setDialog('key')}/>,
+    test: <TestPanel data={data} csrf={csrf}/>,
+    routes: <Routes data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('route')}/>,
+    logs: <Logs csrf={csrf}/>,
+    automation: <Automation data={data} csrf={csrf} onRefresh={load}/>,
+    backup: <Backup csrf={csrf}/>,
+  }
+  const content = pages[page]
 
   return <div className="app-shell">
     {drawer && (
@@ -532,6 +676,9 @@ function App() {
     )}
     {dialog === 'key' && (
       <KeyDialog csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved(true)}/>
+    )}
+    {dialog === 'route' && (
+      <RouteDialog data={data} csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved()}/>
     )}
   </div>
 }

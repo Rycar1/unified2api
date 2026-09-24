@@ -22,7 +22,7 @@ from .pool import AccountPool, PoolMiddleware
 from .metrics import RequestMetrics, MetricsMiddleware
 
 COOKIE = "workbuddy_admin"
-MAX_BODY = 1024 * 1024
+MAX_BODY = 16 * 1024 * 1024
 ASSETS = Path(__file__).parent / "static"
 
 

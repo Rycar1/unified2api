@@ -19,6 +19,7 @@ services:
       TW2A_STATE_FILE: /app/trae-data/state.json
       TW2A_WORK_MODE: auto
       SECURE_COOKIE: "false"
+      UNIFIED_ALLOW_RESTART: "true"
       TZ: Asia/Shanghai
     volumes:
       - trae-auth:/app/auths

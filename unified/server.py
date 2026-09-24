@@ -19,9 +19,28 @@ from .trae import Trae
 from .custom import Connections
 from .monkey_login import MonkeyLogin
 from .errors import safe_error_message
+from .features import (AutomationManager, BackupManager, RequestLog,
+                       RequestLogMiddleware, RouteManager, UnifiedConfig)
 
 STATIC = Path(__file__).parent / "static"
 PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/messages"}
+
+
+def response_failed(body):
+    values = []
+    try:
+        values.append(json.loads(body))
+    except (ValueError, UnicodeDecodeError):
+        for line in body.splitlines():
+            if line.startswith(b"data:") and line[5:].strip() != b"[DONE]":
+                try:
+                    values.append(json.loads(line[5:].strip()))
+                except (ValueError, UnicodeDecodeError):
+                    continue
+    return any(isinstance(value, dict) and (
+        value.get("error") or value.get("type") in {"error", "response.failed", "response.incomplete"}
+        or isinstance(value.get("response"), dict) and value["response"].get("status") in {"failed", "incomplete"}
+    ) for value in values)
 
 
 async def body_json(req):
@@ -35,9 +54,10 @@ async def body_json(req):
 
 
 class API:
-    def __init__(self, app, buddy, native, connections=None):
+    def __init__(self, app, buddy, native, connections=None, routes=None):
         self.app, self.buddy, self.native = app, buddy, native
         self.connections = connections
+        self.routes = routes
 
     async def models(self):
         code, result = await self.native.request("GET", "/v1/models")
@@ -53,7 +73,97 @@ class API:
             unavailable.append("monkeycode")
         if self.connections:
             models += self.connections.models()
+        if self.routes:
+            models += self.routes.public_models()
         return {"object": "list", "data": models, "unavailable_providers": unavailable}
+
+    async def route_request(self, rid, scope, receive, send, data):
+        route, targets = self.routes.candidates(rid)
+        if not targets:
+            raise HTTPException(503, "路由没有可用目标")
+        for index, target in enumerate(targets):
+            routed = dict(data)
+            routed["model"] = target
+            body = json.dumps(routed, ensure_ascii=False, allow_nan=False).encode()
+            sent = False
+
+            async def replay():
+                nonlocal sent
+                if not sent:
+                    sent = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                return await receive()
+
+            child_scope = dict(scope)
+            child_scope["headers"] = [(k, v) for k, v in scope["headers"] if k.lower() != b"content-length"]
+            child_scope["headers"].append((b"content-length", str(len(body)).encode()))
+            child_scope["state"] = scope.setdefault("state", {})
+            started = time.monotonic()
+            if data.get("stream"):
+                queue = asyncio.Queue(maxsize=16)
+
+                async def capture(message):
+                    await queue.put(message)
+
+                async def run():
+                    try:
+                        await self.__call__(child_scope, replay, capture)
+                    finally:
+                        await queue.put(None)
+
+                task = asyncio.create_task(run())
+                pending = []
+                status = 502
+                failed_payload = False
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    pending.append(event)
+                    if event["type"] == "http.response.start":
+                        status = event["status"]
+                        if not 200 <= status < 300:
+                            break
+                    elif event["type"] == "http.response.body" and event.get("body"):
+                        first = event["body"][:65536]
+                        failed_payload = response_failed(first)
+                        break
+                ok = 200 <= status < 300 and not failed_payload
+                if ok or index == len(targets) - 1:
+                    scope.setdefault("state", {})["resolved_model"] = target
+                    try:
+                        for event in pending:
+                            await send(event)
+                        while True:
+                            event = await queue.get()
+                            if event is None:
+                                break
+                            await send(event)
+                        await task
+                    finally:
+                        self.routes.record(target, ok, status, (time.monotonic() - started) * 1000, route["cooldown_seconds"])
+                    return
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                self.routes.record(target, False, status, (time.monotonic() - started) * 1000, route["cooldown_seconds"])
+            else:
+                events = []
+
+                async def capture(message):
+                    events.append(message)
+
+                await self.__call__(child_scope, replay, capture)
+                status = next((event["status"] for event in events if event["type"] == "http.response.start"), 502)
+                response_body = b"".join(event.get("body", b"") for event in events if event["type"] == "http.response.body")
+                failed_payload = response_failed(response_body[:65536])
+                ok = 200 <= status < 300 and not failed_payload
+                self.routes.record(target, ok, status, (time.monotonic() - started) * 1000, route["cooldown_seconds"])
+                if ok or index == len(targets) - 1:
+                    scope.setdefault("state", {})["resolved_model"] = target
+                    for event in events:
+                        await send(event)
+                    return
+        raise HTTPException(503, "所有路由目标均不可用")
 
     async def stream_native(self, scope, receive, send, body):
         started = False
@@ -114,8 +224,13 @@ class API:
                 raise HTTPException(400, "请指定带平台前缀的模型")
             provider, sep, model = data["model"].partition("/")
             custom_ids = {r["id"] for r in self.connections.rows()} if self.connections else set()
-            if not sep or provider not in {"trae", "codebuddy", "monkeycode"} | custom_ids or not model.strip():
+            providers = {"trae", "codebuddy", "monkeycode"} | custom_ids
+            if self.routes:
+                providers.add("route")
+            if not sep or provider not in providers or not model.strip():
                 raise HTTPException(400, "请选择模型目录中带平台或服务前缀的模型")
+            if provider == "route":
+                return await self.route_request(model, scope, receive, send, data)
             if provider in {"trae", "monkeycode"} and path != "/v1/chat/completions":
                 raise HTTPException(400, "此平台当前仅支持 Chat Completions")
             data["model"] = model
@@ -151,18 +266,31 @@ def create_app(native=None, buddy=None):
     connections = Connections(store.root / "connections.json")
     metrics = RequestMetrics()
     login_owners = {}
+    unified_config = UnifiedConfig(store)
+    routes = RouteManager(unified_config)
+    request_log = RequestLog(store.root / "request_logs.sqlite")
+    backup = BackupManager({
+        "management": store.root,
+        "codebuddy-auth": store.auth_dir,
+        "trae-auth": Path(os.environ.get("TW2A_AUTH_DIR", "/app/auths")),
+        "trae-data": Path(os.environ.get("TW2A_STATE_FILE", "/app/trae-data/state.json")).parent,
+    })
+    automation = None
 
     @asynccontextmanager
     async def lifespan(app):
         async with buddy.router.lifespan_context(buddy):
+            automation_task = asyncio.create_task(automation.loop())
             try:
                 yield
             finally:
+                automation_task.cancel()
+                await asyncio.gather(automation_task, return_exceptions=True)
                 native.close()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(AdminMiddleware)
-    api = API(app, buddy, native, connections)
+    api = API(app, buddy, native, connections, routes)
 
     async def trae(method, path, obj=None):
         code, data = await native.request(method, path, json.dumps(obj).encode() if obj is not None else b"")
@@ -210,7 +338,9 @@ def create_app(native=None, buddy=None):
                       "remaining": a["balance"] / 1000, "daily_tokens": a["daily_token_balance"], "last_error": a.get("reason", "")}
                      for a in monkey.get("accounts", [])]
         return {"accounts": rows, "connections": connections.rows(), "keys": keys, "pool": settings, "metrics": metrics.snapshot(),
-                "models": (await api.models())["data"], "mode": "single-process"}
+                "models": (await api.models())["data"], "routes": routes.rows(), "automation": automation.settings(),
+                "automation_history": unified_config.get("automation_history", [])[:10],
+                "usage_summary": request_log.summary(), "mode": "single-process"}
 
     @app.post("/admin/api/unified/test")
     async def test_model(req: Request):
@@ -307,23 +437,33 @@ def create_app(native=None, buddy=None):
         store.require_admin(req)
         return await trae("GET", "/admin/api/credits")
 
-    @app.post("/admin/api/unified/checkin")
-    async def checkin_all(req: Request):
-        store.require_admin(req)
+    async def run_maintenance(action):
         groups = []
-
         try:
-            checkin = await trae("POST", "/admin/api/checkin", {})
-            groups.append({"provider": "trae", "results": checkin.get("results", [])})
-        except HTTPException:
-            groups.append({"provider": "trae", "results": [{"ok": False, "message": "TRAE 签到服务暂时不可用"}]})
-
+            if action == "checkin":
+                result = await trae("POST", "/admin/api/checkin", {})
+                trae_results = result.get("results", [])
+            else:
+                accounts = await trae("GET", "/admin/api/accounts")
+                trae_results = []
+                for account in accounts.get("accounts", []):
+                    if not account.get("enabled"):
+                        continue
+                    aid = quote(account["uid"], safe="")
+                    try:
+                        await trae("POST", "/admin/api/accounts/" + aid + "/refresh", {})
+                        item = await trae("POST", "/admin/api/accounts/" + aid + "/balance", {})
+                        trae_results.append({"id": account["uid"], "ok": True, "message": "状态和余额已更新", **item})
+                    except HTTPException as exc:
+                        trae_results.append({"id": account["uid"], "ok": False, "message": str(exc.detail)})
+            groups.append({"provider": "trae", "results": trae_results})
+        except HTTPException as exc:
+            groups.append({"provider": "trae", "results": [{"ok": False, "message": str(exc.detail)}]})
         try:
-            checkin = await pool.batch("checkin")
-            groups.append({"provider": "codebuddy", "results": checkin.get("results", [])})
-        except HTTPException:
-            groups.append({"provider": "codebuddy", "results": [{"ok": False, "message": "CodeBuddy 签到任务正在运行"}]})
-
+            result = await pool.batch("checkin" if action == "checkin" else "status")
+            groups.append({"provider": "codebuddy", "results": result.get("results", [])})
+        except HTTPException as exc:
+            groups.append({"provider": "codebuddy", "results": [{"ok": False, "message": str(exc.detail)}]})
         monkey_results = []
         code, monkey = await native.request("GET", "/monkey/admin/accounts")
         if code == 200:
@@ -331,20 +471,27 @@ def create_app(native=None, buddy=None):
                 if account.get("disabled"):
                     continue
                 try:
-                    item = await monkey_request("POST", "/admin/accounts/" + quote(account["uid"], safe="") + "/checkin")
-                    monkey_results.append(item)
-                except HTTPException as exc:
-                    monkey_results.append({"id": account.get("uid"), "ok": False, "message": str(exc.detail)})
+                    suffix = "/checkin" if action == "checkin" else "/refresh"
+                    item_code, item = await native.request("POST", "/monkey/admin/accounts/" + quote(account["uid"], safe="") + suffix)
+                    monkey_results.append(item if item_code < 400 else {"id": account.get("uid"), "ok": False, "message": item.get("detail", "操作失败")})
+                except (ValueError, RuntimeError):
+                    monkey_results.append({"id": account.get("uid"), "ok": False, "message": "操作失败"})
         else:
-            monkey_results.append({"ok": False, "message": "MonkeyCode 签到服务暂时不可用"})
+            monkey_results.append({"ok": False, "message": "MonkeyCode 服务暂时不可用"})
         groups.append({"provider": "monkeycode", "results": monkey_results})
-
         all_results = [item for group in groups for item in group["results"]]
         return {"providers": groups, "summary": {
             "total": len(all_results),
             "succeeded": sum(1 for item in all_results if item.get("ok")),
             "failed": sum(1 for item in all_results if not item.get("ok")),
         }}
+
+    @app.post("/admin/api/unified/checkin")
+    async def checkin_all(req: Request):
+        store.require_admin(req)
+        return await run_maintenance("checkin")
+
+    automation = AutomationManager(unified_config, run_maintenance)
 
     @app.post("/admin/api/unified/trae/login")
     async def login(req: Request):
@@ -437,6 +584,76 @@ def create_app(native=None, buddy=None):
         store.require_admin(req)
         return connections.delete(cid) if req.method == "DELETE" else connections.save(await body_json(req), cid)
 
+    async def routable_models():
+        return {item["id"] for item in (await api.models())["data"] if not item["id"].startswith("route/")}
+
+    @app.get("/admin/api/unified/routes")
+    async def list_routes(req: Request):
+        store.require_admin(req)
+        return {"routes": routes.rows()}
+
+    @app.post("/admin/api/unified/routes")
+    async def add_route(req: Request):
+        store.require_admin(req)
+        return routes.save(await body_json(req), await routable_models())
+
+    @app.api_route("/admin/api/unified/routes/{rid}", methods=["PATCH", "DELETE"])
+    async def edit_route(rid: str, req: Request):
+        store.require_admin(req)
+        if req.method == "DELETE":
+            return routes.delete(rid)
+        return routes.save(await body_json(req), await routable_models(), rid)
+
+    @app.get("/admin/api/unified/logs")
+    async def logs(req: Request):
+        store.require_admin(req)
+        query = req.query_params
+        ok = None if query.get("ok") not in {"true", "false"} else query.get("ok") == "true"
+        return {**request_log.query(query.get("limit", 100), query.get("offset", 0), query.get("model", ""), ok),
+                "summary": request_log.summary(query.get("hours", 24))}
+
+    @app.delete("/admin/api/unified/logs")
+    async def clear_logs(req: Request):
+        store.require_admin(req)
+        request_log.clear()
+        return {"ok": True}
+
+    @app.get("/admin/api/unified/automation")
+    async def automation_status(req: Request):
+        store.require_admin(req)
+        return {"settings": automation.settings(), "history": unified_config.get("automation_history", [])}
+
+    @app.patch("/admin/api/unified/automation")
+    async def update_automation(req: Request):
+        store.require_admin(req)
+        return {"settings": automation.update(await body_json(req))}
+
+    @app.post("/admin/api/unified/automation/run/{action}")
+    async def run_automation(action: str, req: Request):
+        store.require_admin(req)
+        return await automation.execute(action, manual=True)
+
+    @app.post("/admin/api/unified/backup/export")
+    async def export_backup(req: Request):
+        store.require_admin(req)
+        body = await body_json(req)
+        blob = await asyncio.to_thread(backup.export, body.get("password"), bool(body.get("include_logs", False)))
+        filename = "unified2api-" + time.strftime("%Y%m%d-%H%M%S") + ".ubak"
+        return Response(blob, media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.post("/admin/api/unified/backup/import")
+    async def import_backup(req: Request):
+        store.require_admin(req)
+        body = await body_json(req)
+        if not isinstance(body.get("data"), str):
+            raise HTTPException(400, "请选择备份文件")
+        result_data = await asyncio.to_thread(backup.restore, body["data"], body.get("password"))
+        if os.environ.get("UNIFIED_ALLOW_RESTART", "false").lower() == "true":
+            asyncio.get_running_loop().call_later(1.5, os._exit, 0)
+            result_data["restarting"] = True
+        return result_data
+
     monkey_login = MonkeyLogin(store, monkey_request)
     monkey_login.register(app, body_json)
 
@@ -449,7 +666,7 @@ def create_app(native=None, buddy=None):
         return FileResponse(archive, filename="monkey-login-helper.zip", media_type="application/zip")
 
     app.mount("/", buddy)
-    result = MetricsMiddleware(api, metrics=metrics)
+    result = RequestLogMiddleware(MetricsMiddleware(api, metrics=metrics), request_log)
     result.state = app.state
     result.state.buddy, result.state.native = buddy, native
     result.state.connections = connections

@@ -267,3 +267,40 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.app.state.connections.relay("myapi", scope["path"], b"{}", scope, receive, send), 2)
         self.assertIn(b"first", b"".join(received))
         self.assertTrue(stream.closed)
+
+    async def test_routes_logs_automation_and_backup_admin_apis(self):
+        await self.add()
+        route = {"id": "stable", "name": "稳定模型", "targets": ["myapi/org/model"],
+                 "strategy": "priority", "retries": 0, "cooldown_seconds": 60}
+        self.assertEqual((await self.client.post("/admin/api/unified/routes", json=route)).status_code, 403)
+        created = await self.client.post("/admin/api/unified/routes", headers=self.csrf, json=route)
+        self.assertEqual(created.status_code, 200, created.text)
+        models = (await self.client.get("/v1/models", headers=self.api_headers)).json()["data"]
+        self.assertTrue(any(item["id"] == "route/stable" for item in models))
+
+        self.app.state.connections.transport = httpx.MockTransport(lambda req: httpx.Response(200, json={
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 6,
+                      "completion_tokens_details": {"reasoning_tokens": 2}},
+        }))
+        response = await self.client.post("/v1/chat/completions", headers=self.api_headers,
+            json={"model": "route/stable", "messages": [{"role": "user", "content": "hello"}]})
+        self.assertEqual(response.status_code, 200, response.text)
+        logs = (await self.client.get("/admin/api/unified/logs")).json()
+        self.assertGreaterEqual(logs["total"], 1)
+        self.assertEqual(logs["items"][0]["resolved_model"], "myapi/org/model")
+        self.assertEqual(logs["items"][0]["reasoning_tokens"], 2)
+
+        settings = await self.client.patch("/admin/api/unified/automation", headers=self.csrf,
+            json={"auto_checkin": True, "checkin_time": "08:00", "auto_refresh": True,
+                  "refresh_minutes": 20, "low_balance": 1, "notify_failures": True})
+        self.assertEqual(settings.status_code, 200, settings.text)
+        self.assertTrue(settings.json()["settings"]["auto_checkin"])
+
+        exported = await self.client.post("/admin/api/unified/backup/export", headers=self.csrf,
+                                          json={"password": "test-password", "include_logs": False})
+        self.assertEqual(exported.status_code, 200, exported.text)
+        self.assertTrue(exported.content.startswith(b"U2API1\0"))
+        wrong = await self.client.post("/admin/api/unified/backup/import", headers=self.csrf,
+            json={"password": "wrong-password", "data": base64.b64encode(exported.content).decode()})
+        self.assertEqual(wrong.status_code, 400)
