@@ -218,7 +218,8 @@ class RequestLog:
                 COALESCE(SUM(reasoning_tokens),0) reasoning_tokens
                 FROM requests WHERE created>=? GROUP BY model ORDER BY (SUM(prompt_tokens)+SUM(completion_tokens)) DESC""",
                 (since,)).fetchall()
-            total = db.execute("""SELECT COUNT(*) requests, COALESCE(SUM(prompt_tokens),0) prompt_tokens,
+            total = db.execute("""SELECT COUNT(*) requests, MIN(created) first_recorded_at,
+                COALESCE(SUM(prompt_tokens),0) prompt_tokens,
                 COALESCE(SUM(completion_tokens),0) completion_tokens,
                 COALESCE(SUM(reasoning_tokens),0) reasoning_tokens FROM requests WHERE created>=?""",
                 (since,)).fetchone()

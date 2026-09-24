@@ -519,7 +519,15 @@ function Logs({ csrf }) {
 }
 
 const tokenCount = value => Number(value || 0)
-const tokenText = value => tokenCount(value).toLocaleString('zh-CN')
+const exactCount = value => tokenCount(value).toLocaleString('zh-CN')
+const tokenText = value => {
+  const count = tokenCount(value)
+  if (!count) return '0'
+  if (count < 10000) return '<0.01 百万'
+  const large = count >= 100000000
+  const amount = count / (large ? 100000000 : 1000000)
+  return `${amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} ${large ? '亿' : '百万'}`
+}
 const totalTokens = row => tokenCount(row?.prompt_tokens) + tokenCount(row?.completion_tokens)
 const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 const parseLocalDay = key => new Date(`${key}T00:00:00`)
@@ -564,6 +572,7 @@ function Usage({ settings, refreshNonce }) {
   }, [dailyMap, retentionDays, state.daily])
 
   const todayKey = dateKey(new Date())
+  const firstRecordedAt = state.total?.first_recorded_at
   const summary = useMemo(() => {
     const sumSince = days => {
       const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - days + 1)
@@ -632,7 +641,7 @@ function Usage({ settings, refreshNonce }) {
 
   return <div className="stack usage-page">
     <section className="summary-grid usage-summary">
-      {[["今日 Token", summary.today], ["近 7 日", summary.week], ["近 30 日", summary.month], ["累计 Token", summary.total]].map(([label, value]) => <article className="summary-card" key={label}><div><strong>{tokenText(value)}</strong><span>{label}</span></div></article>)}
+      {[["今日 Token", summary.today], ["近 7 日", summary.week], ["近 30 日", summary.month], ["累计 Token", summary.total]].map(([label, value]) => <article className="summary-card" key={label}><div><strong title={`${exactCount(value)} Token`}>{tokenText(value)}</strong><span>{label}</span></div></article>)}
     </section>
     <section className="content-card usage-heatmap-card">
       <div className="section-head"><div><span className="section-label">活动日历</span><h2>Token 消耗热力图</h2><p className="muted">每格代表一天；颜色越深，当天消耗越多。当前保留 {retentionDays} 天。</p></div><button className="button secondary" onClick={load} disabled={loading}><RefreshCw size={14} className={loading ? 'spin' : ''}/>刷新</button></div>
@@ -645,27 +654,28 @@ function Usage({ settings, refreshNonce }) {
             {heatmap.weeks.map((week, index) => <div className="heatmap-week" key={index}>{week.map(cell => {
               const count = totalTokens(cell.row)
               const level = count ? Math.min(4, Math.max(1, Math.ceil(count / Math.max(1, heatmap.max) * 4))) : 0
-              const description = `${cell.key} · ${tokenText(count)} tokens · ${cell.row?.requests || 0} 次请求`
-              return <span key={cell.key} className={`heat-cell level-${level} ${cell.visible ? '' : 'outside'}`} title={cell.visible ? description : ''} aria-label={cell.visible ? description : undefined} onMouseEnter={() => cell.visible && setHoverDay(description)} onMouseLeave={() => setHoverDay('')}/>
+              const description = `${cell.key} · ${tokenText(count)} Token · ${cell.row?.requests || 0} 次请求`
+              return <span key={cell.key} className={`heat-cell level-${level} ${cell.visible ? '' : 'outside'}`} title={cell.visible ? `${cell.key} · ${exactCount(count)} Token · ${cell.row?.requests || 0} 次请求` : ''} aria-label={cell.visible ? description : undefined} onMouseEnter={() => cell.visible && setHoverDay(description)} onMouseLeave={() => setHoverDay('')}/>
             })}</div>)}
           </div>
         </div>
       </div>
       <div className="heatmap-footer"><span className="muted">{hoverDay || '将鼠标移到方格查看当天详情'}</span><span className="heat-legend"><small>少</small>{[0,1,2,3,4].map(level => <i key={level} className={`heat-cell level-${level}`}/>)}<small>多</small></span></div>
+      {firstRecordedAt && <p className="muted usage-footnote">从 {new Date(firstRecordedAt * 1000).toLocaleString('zh-CN')} 开始记录；此前的调用没有历史 Token 记录，无法回填到统计页。</p>}
     </section>
     <div className="usage-lower-grid">
       <section className="content-card trend-card">
         <div className="section-head"><div><span className="section-label">消耗趋势</span><h2>{period === 'daily' ? '每日 Token' : period === 'weekly' ? '每周 Token' : '按月累计 Token'}</h2></div><div className="filter-tabs" role="tablist" aria-label="统计周期">{[['daily','每日'],['weekly','每周'],['total','累计']].map(([id,label]) => <button key={id} role="tab" aria-selected={period === id} className={period === id ? 'active' : ''} onClick={() => setPeriod(id)}>{label}</button>)}</div></div>
         <div className="trend-chart" role="img" aria-label="Token 消耗趋势柱状图">
-          {trend.length ? trend.map((item, index) => <div className="trend-column" key={item.key} title={`${item.label} · ${tokenText(item.tokens)} tokens`}><span className="trend-value">{tokenText(item.tokens)}</span><i style={{ height: `${Math.max(item.tokens ? 3 : 0, item.tokens / maxTrend * 100)}%` }}/><small>{index === 0 || index === trend.length - 1 || index % Math.max(1, Math.ceil(trend.length / 8)) === 0 ? item.label : ''}</small></div>) : <Empty>暂无统计数据，产生调用后会显示 Token 用量</Empty>}
+          {trend.length ? trend.map((item, index) => <div className="trend-column" key={item.key} title={`${item.label} · ${exactCount(item.tokens)} Token`}><span className="trend-value">{tokenText(item.tokens)}</span><i style={{ height: `${Math.max(item.tokens ? 3 : 0, item.tokens / maxTrend * 100)}%` }}/><small>{index === 0 || index === trend.length - 1 || index % Math.max(1, Math.ceil(trend.length / 8)) === 0 ? item.label : ''}</small></div>) : <Empty>暂无统计数据，产生调用后会显示 Token 用量</Empty>}
         </div>
         <p className="muted usage-footnote">用量取自上游返回的 Token 统计；若上游未返回用量字段，该次请求会显示为 0。</p>
       </section>
       <section className="content-card model-usage-card">
         <div className="section-head"><div><span className="section-label">模型分布</span><h2>按模型统计</h2></div></div>
         {modelTotal ? <div className="model-usage-content">
-          <div className="donut-wrap"><svg viewBox="0 0 144 144" role="img" aria-label={`累计 ${tokenText(modelTotal)} tokens`}><circle className="donut-track" cx="72" cy="72" r="56"/><g transform="rotate(-90 72 72)">{ring.map(item => <circle key={item.model} cx="72" cy="72" r="56" fill="none" stroke={item.color} strokeWidth="22" strokeDasharray={`${item.length} ${circumference - item.length}`} strokeDashoffset={-item.offset}/>)}</g></svg><div><strong>{tokenText(modelTotal)}</strong><span>tokens</span></div></div>
-          <div className="model-usage-list">{chartModels.map(item => <div className="model-usage-row" key={item.model}><div><i style={{ background: item.color }}/><code title={item.model}>{item.model}</code><strong>{modelTotal ? `${(item.tokens / modelTotal * 100).toFixed(1)}%` : '0%'}</strong></div><small>{tokenText(item.tokens)} tokens · {tokenText(item.requests)} 次请求</small></div>)}</div>
+          <div className="donut-wrap"><svg viewBox="0 0 144 144" role="img" aria-label={`累计 ${exactCount(modelTotal)} Token`}><circle className="donut-track" cx="72" cy="72" r="56"/><g transform="rotate(-90 72 72)">{ring.map(item => <circle key={item.model} cx="72" cy="72" r="56" fill="none" stroke={item.color} strokeWidth="22" strokeDasharray={`${item.length} ${circumference - item.length}`} strokeDashoffset={-item.offset}/>)}</g></svg><div><strong title={`${exactCount(modelTotal)} Token`}>{tokenText(modelTotal)}</strong><span>Token</span></div></div>
+          <div className="model-usage-list">{chartModels.map(item => <div className="model-usage-row" key={item.model}><div><i style={{ background: item.color }}/><code title={item.model}>{item.model}</code><strong>{modelTotal ? `${(item.tokens / modelTotal * 100).toFixed(1)}%` : '0%'}</strong></div><small title={`${exactCount(item.tokens)} Token`}>{tokenText(item.tokens)} Token · {exactCount(item.requests)} 次请求</small></div>)}</div>
         </div> : <Empty>{loading ? '正在读取用量…' : '暂无 Token 统计数据'}</Empty>}
       </section>
     </div>
