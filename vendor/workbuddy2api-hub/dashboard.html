@@ -1,0 +1,3813 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WorkBuddy 用量看板</title>
+<style>
+:root{
+  --bg:#f8fafc; --panel:#ffffff; --panel2:#f1f5f9; --panel3:#e2e8f0;
+  --line:#e2e8f0; --line-hover:#cbd5e1;
+  --fg:#0f172a; --dim:#64748b; --dim-light:#94a3b8;
+  --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:rgba(37,99,235,.08);
+  --accent2:#16a34a; --accent2-soft:rgba(22,163,74,.1);
+  --warn:#d97706; --warn-soft:rgba(217,119,6,.1);
+  --think:#7c3aed; --think-soft:rgba(124,58,237,.08);
+  --bad:#dc2626; --bad-soft:rgba(220,38,38,.08);
+  --shadow-sm:0 1px 2px 0 rgba(15,23,42,.05);
+  --shadow:0 1px 3px 0 rgba(15,23,42,.06),0 1px 2px -1px rgba(15,23,42,.04);
+  --shadow-md:0 4px 6px -2px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;
+  align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  position:sticky;top:0;background:rgba(255,255,255,.94);backdrop-filter:blur(10px);z-index:10;box-shadow:var(--shadow-sm)}
+h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.2px;color:var(--fg)}
+h1 span{color:var(--dim);font-weight:400;font-size:13px;margin-left:8px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent2);
+  margin-right:7px;vertical-align:middle;box-shadow:0 0 0 2px rgba(22,163,74,.2)}
+.dot.err{background:var(--bad);box-shadow:0 0 0 2px rgba(220,38,38,.2)}
+.meta{color:var(--dim);font-size:12px;text-align:right;line-height:1.6}
+.meta b{color:var(--fg);font-weight:600}
+main{padding:24px 24px 60px;max-width:1280px;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px;margin-bottom:22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;box-shadow:var(--shadow);min-width:0}
+.card .k{color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
+.card .v{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .s{color:var(--dim);font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card.think .v{color:var(--think)}
+.card.accent .v{color:var(--accent)}
+.card.accent2 .v{color:var(--accent2)}
+.card.err .v{color:var(--bad)}
+#cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+#cards .card{padding:14px 18px;min-width:0;border-radius:12px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+#cards .card .k{font-size:12px;color:var(--dim);margin-bottom:6px;font-weight:500}
+#cards .card .v{font-size:22px;font-weight:700;white-space:nowrap;letter-spacing:-.3px}
+#cards .card .s{font-size:11px;color:var(--dim);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;margin-bottom:20px;box-shadow:var(--shadow)}
+section h2{margin:0 0 14px;font-size:13px;font-weight:700;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.6px}
+section h2 em{color:var(--fg);font-style:normal;text-transform:none;letter-spacing:0;margin-left:6px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:right;padding:9px 12px;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;vertical-align:middle}
+th{color:var(--dim);font-weight:600;font-size:12px;white-space:nowrap;background:var(--panel2)}
+th:first-child{border-top-left-radius:8px;border-bottom-left-radius:8px}
+th:last-child{border-top-right-radius:8px;border-bottom-right-radius:8px}
+th:first-child,td:first-child{text-align:left}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:rgba(241,245,249,.6)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+/* 输入 / 输出 / 思考：三个数字应该在一行内读完，不拆行 */
+.triple{white-space:nowrap}
+.bar-fill{height:6px;border-radius:3px;background:var(--accent);min-width:2px;display:inline-block;vertical-align:middle}
+.bar-fill.think{background:var(--think)}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%;border-radius:8px}
+.table-wrap table{min-width:720px}
+@media (max-width: 860px){
+  header{padding:12px 16px}
+  main{padding:16px 12px 60px}
+  section{padding:14px 14px;border-radius:12px}
+  #cards{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+  #cards .card{padding:10px 12px}
+  #cards .card .v{font-size:18px}
+  .toolbar{gap:6px}
+  .toolbar button{padding:5px 10px;font-size:11px}
+}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim);white-space:nowrap;font-weight:600}
+.badge.ok{color:#15803d;background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.32)}
+.badge.s{color:#1d4ed8;background:rgba(37,99,235,.1);border-color:rgba(37,99,235,.25)}
+.badge.off{color:#64748b;background:#e2e8f0;border-color:#cbd5e1}
+.badge.warn{color:#b45309;background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.35)}
+.badge.bad{color:#b91c1c;background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.35)}
+.badge.mini{padding:1px 6px;font-size:10px}
+.cool-list{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.cool-pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:600;
+  color:#b45309;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.35);white-space:nowrap}
+.empty{color:var(--dim);text-align:center;padding:28px 0;font-size:13px}
+.legend{display:flex;gap:16px;color:var(--dim);font-size:11px;margin-top:12px;flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+button{cursor:pointer;font:inherit;font-size:12px;font-weight:500;padding:6px 14px;border-radius:8px;
+  border:1px solid var(--accent);background:var(--accent);color:#fff;box-shadow:var(--shadow-sm);transition:all .15s ease}
+button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.sec{background:#fff;border-color:var(--line);color:var(--fg);box-shadow:var(--shadow-sm)}
+button.sec:hover{background:var(--panel2);border-color:var(--line-hover)}
+button.danger{border-color:rgba(220,38,38,.3);background:rgba(220,38,38,.06);color:var(--bad)}
+button.danger:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
+button.mini{padding:3px 9px;font-size:11px}
+.id-btn-group{display:inline-flex;gap:2px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px}
+.id-btn{background:transparent;border:none;color:var(--dim);padding:2px 6px;border-radius:4px;font-size:11px;font-weight:500;cursor:pointer;transition:all .15s}
+.id-btn:hover{color:var(--fg)}
+.id-btn.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
+.slot-select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:5px 8px;color:var(--fg);font:inherit;font-size:12px;max-width:140px}
+.slot-input{width:100%;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit;font-size:13px}
+.acct-actions-col{display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center}
+.acct-actions-row{display:flex;gap:4px;justify-content:center}
+.modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);
+  backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px;z-index:100}
+.modal-mask.show{display:flex}
+.modal{background:#fff;border:1px solid var(--line);border-radius:14px;
+  width:min(620px,100%);max-height:88vh;overflow:auto;box-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.05)}
+.modal-hd{display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--line)}
+.modal-hd h2{margin:0;font-size:15px;font-weight:700;text-transform:none;letter-spacing:0;color:var(--fg)}
+.modal-x{background:none;border:none;color:var(--dim);font-size:22px;line-height:1;padding:0 4px;cursor:pointer}
+.modal-x:hover{color:var(--fg)}
+.modal-bd{padding:18px 20px}
+.modal-ft{padding:14px 20px;border-top:1px solid var(--line);display:flex;
+  justify-content:flex-end;gap:8px}
+.login-link{display:block;word-break:break-all;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:12px 0;
+  color:var(--accent);text-decoration:none;font-size:12px}
+.login-link:hover{border-color:var(--accent);background:#fff}
+.hint{color:var(--dim);font-size:12px;margin:8px 0}
+.step{display:flex;gap:10px;align-items:flex-start;margin:10px 0}
+.step .n{flex:0 0 20px;height:20px;border-radius:50%;background:var(--panel2);
+  border:1px solid var(--line);color:var(--dim);font-size:11px;display:flex;
+  align-items:center;justify-content:center}
+.step.active .n{border-color:var(--accent);background:rgba(37,99,235,.1);color:var(--accent);font-weight:700}
+.step.done .n{border-color:var(--accent2);background:rgba(22,163,74,.1);color:var(--accent2);font-weight:700}
+.step .t{font-size:13px}
+footer{color:var(--dim);font-size:12px;text-align:center;margin-top:28px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.realm-switch-group{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.realm-pill{background:transparent;border:none;color:var(--dim);font-size:12px;padding:6px 16px;border-radius:8px;cursor:pointer;transition:all .15s}
+.realm-pill:hover{color:var(--fg)}
+.realm-pill.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
+.key-card{
+  background:#ffffff;border:1px solid var(--line);border-radius:12px;
+  padding:16px 20px;margin-bottom:12px;box-shadow:var(--shadow);
+  transition:all .15s ease;
+}
+.key-card:hover{border-color:var(--line-hover);box-shadow:var(--shadow-md)}
+.key-card.disabled{opacity:.75;background:rgba(241,245,249,.5)}
+.key-card-main{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+}
+.key-action-btn{
+  display:inline-flex;align-items:center;gap:5px;padding:5px 14px;border-radius:20px;
+  font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--line);
+  background:#ffffff;color:var(--fg);transition:all .15s ease;box-shadow:var(--shadow-sm);
+}
+.key-action-btn:hover{background:var(--panel2);border-color:var(--line-hover)}
+.key-action-btn.danger{
+  color:#dc2626;border-color:rgba(220,38,38,.28);background:rgba(220,38,38,.03);
+}
+.key-action-btn.danger:hover{
+  background:#dc2626;color:#ffffff;border-color:#dc2626;
+}
+.realm-badge-intl{color:#0369a1;background:rgba(2,132,199,.12);border:1px solid rgba(2,132,199,.3);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
+.realm-badge-cn{color:#b91c1c;background:rgba(220,38,38,.12);border:1px solid rgba(220,38,38,.3);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
+.badge-effort{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;line-height:1.4;white-space:nowrap;margin:1px 2px;background:rgba(124,58,237,.12);color:var(--think);border:1px solid rgba(124,58,237,.3);font-weight:600}
+.realm-filter{display:inline-flex;gap:6px;margin-left:8px}
+.realm-filter button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);padding:3px 9px;font-size:11px}
+.realm-filter button.active{border-color:var(--accent);color:var(--accent);background:#fff}
+
+.realm-card{
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:14px 18px;box-shadow:var(--shadow);cursor:pointer;transition:all .15s ease;
+  position:relative;display:flex;flex-direction:column;justify-content:space-between;min-height:104px;
+}
+.realm-card:hover{border-color:var(--line-hover);transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.realm-card.active{
+  border-color:var(--accent);background:#ffffff;
+  box-shadow:0 0 0 1px var(--accent), var(--shadow-md);
+}
+.realm-card.active#tabCn{
+  border-color:#ef4444;box-shadow:0 0 0 1px #ef4444, var(--shadow-md);
+}
+.realm-card.gateway-ctrl{
+  background:var(--panel2);cursor:default;border-color:var(--line);
+}
+.realm-card.gateway-ctrl:hover{transform:none;border-color:var(--line);box-shadow:var(--shadow)}
+.toggle-realm-btn{
+  background:#fff;border:1px solid var(--accent);color:var(--accent);
+  padding:8px 18px;font-size:13px;font-weight:600;border-radius:8px;box-shadow:var(--shadow-sm);cursor:pointer;
+  transition:all .15s ease;
+}
+.toggle-realm-btn:hover{background:rgba(0,0,0,.04);box-shadow:var(--shadow-md)}
+.realm-endpoint-info{font-size:12px;color:var(--dim)}
+
+.main-nav{display:inline-flex;gap:4px;background:var(--panel2);padding:4px;border-radius:10px;border:1px solid var(--line)}
+.main-nav-btn{background:transparent;border:1px solid transparent;color:var(--dim);padding:6px 14px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s ease}
+.main-nav-btn:hover{color:var(--fg);background:#fff}
+.main-nav-btn.active{background:#fff;color:var(--fg);border-color:var(--line);box-shadow:var(--shadow-sm);font-weight:600}
+/* 项目仓库入口：与顶部导航同行，但不作为一个 Tab 标签。 */
+.gh-link{display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
+  background:#fff;color:var(--dim);box-shadow:var(--shadow-sm);
+  transition:all .15s ease}
+.gh-link:hover{color:var(--fg);border-color:var(--line-hover);
+  background:var(--panel2);text-decoration:none;box-shadow:var(--shadow-md)}
+.gh-link svg{width:17px;height:17px;display:block;fill:currentColor}
+/* The page sections are toggled by a class so the inline head script can
+   choose one before the body is parsed, avoiding a flash of the wrong
+   page on every reload. */
+.main-page{display:none}
+.main-page.active{display:block}
+.range-btn{background:transparent;border:none;color:var(--dim);padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s ease}
+.range-btn:hover{color:var(--fg)}
+.range-btn.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
+#analyticsKpiCards{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
+#analyticsKpiCards .card{padding:12px 16px;min-width:0;overflow:hidden;border-radius:12px;background:#fff;border:1px solid var(--line);box-shadow:var(--shadow)}
+#analyticsKpiCards .card .v{font-size:19px;font-weight:700;white-space:nowrap}
+#analyticsKpiCards .card .k{font-size:11px;white-space:nowrap;margin-bottom:3px;font-weight:600;color:var(--dim)}
+#analyticsKpiCards .card .s{font-size:10px;white-space:normal;line-height:1.35;margin-top:2px;color:var(--dim)}
+.model-pill{display:inline-flex;align-items:center;gap:4px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;margin:2px 4px 2px 0;white-space:nowrap}
+.log-line{display:flex;align-items:flex-start;gap:8px;padding:3px 6px;border-radius:4px;font-family:Consolas,Monaco,'Courier New',monospace;font-size:12px;line-height:1.55;transition:background .1s}
+.log-line:hover{background:rgba(255,255,255,.05)}
+.log-ts{color:#64748b;font-variant-numeric:tabular-nums;flex-shrink:0;user-select:none}
+.log-lvl{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;flex-shrink:0;text-align:center;min-width:46px;user-select:none}
+.log-lvl.lvl-INFO{background:rgba(37,99,235,.2);color:#60a5fa}
+.log-lvl.lvl-WARN{background:rgba(217,119,6,.2);color:#fbbf24}
+.log-lvl.lvl-ERROR{background:rgba(220,38,38,.25);color:#f87171}
+.log-lvl.lvl-DEBUG{background:rgba(148,163,184,.2);color:#94a3b8}
+.log-tag{font-size:11px;font-weight:600;padding:1px 5px;border-radius:3px;flex-shrink:0;background:rgba(148,163,184,.12);color:#94a3b8;user-select:none}
+.log-tag.tag-chat{background:rgba(124,58,237,.18);color:#c084fc}
+.log-tag.tag-scheduler{background:rgba(22,163,74,.18);color:#4ade80}
+.log-tag.tag-tasks{background:rgba(234,179,8,.18);color:#facc15}
+.log-tag.tag-accounts{background:rgba(14,165,233,.18);color:#38bdf8}
+.log-tag.tag-auth{background:rgba(244,63,94,.18);color:#fb7185}
+.log-tag.tag-system{background:rgba(100,116,139,.18);color:#94a3b8}
+.log-msg{color:#cbd5e1;flex:1;word-break:break-all;white-space:pre-wrap}
+.log-empty{padding:48px 24px;text-align:center;color:#64748b;font-size:13px;font-family:inherit}
+/* ===== Phone: ≤640px ===== */
+@media (max-width: 640px){
+  header{padding:10px 12px;gap:8px}
+  header > div:first-child{width:100%;gap:8px}
+  h1{font-size:15px;flex:1;min-width:0}
+  h1 span{font-size:11px;margin-left:6px}
+  .gh-link{width:40px;height:40px;flex-shrink:0;order:2}
+  .main-nav{display:flex;width:100%;gap:2px;padding:3px;order:3}
+  .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:40px;white-space:nowrap}
+  .meta{width:100%;text-align:left;font-size:11px;line-height:1.5}
+  .meta .meta-secondary{display:none}
+  /* Table → card */
+  .table-wrap{overflow:visible}
+  table.data-cards{min-width:0!important;display:block}
+  table.data-cards thead{display:none}
+  table.data-cards tbody{display:block}
+  table.data-cards tr{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:5px 8px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:12px;margin-bottom:10px;box-shadow:var(--shadow-sm)}
+  table.data-cards td{display:flex;align-items:baseline;justify-content:space-between;
+    gap:12px;grid-column:span 6;border:none;padding:1px 0;text-align:left!important;
+    font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+  table.data-cards td::before{content:attr(data-label);color:var(--dim);font-size:11px;
+    font-weight:600;flex-shrink:0}
+  table.data-cards td:not([data-label])::before{content:none}
+  table.data-cards td[colspan]{grid-column:span 6;justify-content:center;text-align:center!important}
+  table.data-cards td[colspan]::before{content:none}
+  /* Account card: grouped layout */
+  table.account-cards td:nth-child(1){order:1;grid-column:span 3;justify-content:flex-start}
+  table.account-cards td:nth-child(1)::before,
+  table.account-cards td:nth-child(2)::before,
+  table.account-cards td:nth-child(3)::before{content:none}
+  table.account-cards td:nth-child(2){order:3;grid-column:span 6;flex-direction:column;align-items:flex-start;gap:2px}
+  table.account-cards td:nth-child(3){order:2;grid-column:span 3;justify-content:flex-end}
+  table.account-cards td:nth-child(4){order:4;grid-column:span 6;flex-direction:column;align-items:stretch;gap:4px}
+  table.account-cards td:nth-child(4)::before{font-size:10px}
+  table.account-cards td:nth-child(5){order:5;grid-column:span 6}
+  table.account-cards td:nth-child(6),
+  table.account-cards td:nth-child(7),
+  table.account-cards td:nth-child(8){order:6;grid-column:span 2;flex-direction:column-reverse;
+    align-items:center;justify-content:center;gap:0;padding:4px 0;
+    background:var(--panel2);border-radius:8px}
+  table.account-cards td:nth-child(6)::before,
+  table.account-cards td:nth-child(7)::before,
+  table.account-cards td:nth-child(8)::before{font-size:10px}
+  table.account-cards td.acct-actions{order:7;grid-column:span 6;justify-content:flex-start}
+  table.account-cards td.acct-actions::before{content:none}
+  table.account-cards .acct-actions-col{flex-direction:row;flex-wrap:wrap;align-items:flex-start;
+    justify-content:flex-start;gap:6px}
+  table.account-cards .acct-actions-row{flex-wrap:wrap;gap:6px}
+  table.account-cards .acct-actions button.mini{min-height:32px;padding:6px 12px}
+  table.account-cards .slot-select{max-width:none;width:100%;min-height:40px}
+  /* Forms stack */
+  #pageSettings section > div[style*="display:flex"]{flex-wrap:wrap}
+  #pageSettings input:not([type=checkbox]), #pageSettings select{min-height:40px;font-size:13px}
+  #pageSettings .slot-input{font-size:13px}
+  table.data-cards td[data-label="启用"]{justify-content:space-between}
+  table.data-cards td[data-label="启用"] input[type=checkbox]{width:20px;height:20px}
+  /* Logs */
+  #logTerminalBody{height:60vh!important}
+  #pageLogs .toolbar{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  #pageLogs .toolbar button{width:100%;min-height:34px}
+  #pageLogs > div > div[style*="display:flex"]{flex-wrap:wrap}
+  .log-line{flex-wrap:wrap;gap:4px}
+  .log-msg{min-width:0;flex-basis:100%}
+  /* Analytics KPI cards: wrap into a 2-column grid instead of one squeezed row */
+  #analyticsKpiCards{grid-auto-flow:row;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  #analyticsKpiCards .card{padding:10px 12px}
+  #analyticsKpiCards .card .k{white-space:normal}
+  #analyticsKpiCards .card .v{font-size:16px}
+  #analyticsKpiCards .card .s{white-space:normal;overflow:visible;text-overflow:clip}
+  #analyticsKpiCards .card:last-child:nth-child(odd){grid-column:span 2}
+  /* Dialogs */
+  .modal-mask{padding:10px;align-items:flex-start}
+  .modal{width:100%;max-height:94vh;border-radius:12px;margin-top:6px}
+  .modal-hd{padding:12px 14px}
+  .modal-bd{padding:14px}
+  .modal-ft{padding:12px 14px;flex-wrap:wrap}
+  .modal-ft button{flex:1;min-height:38px}
+  .modal table td, .modal table th{padding:7px 8px}
+}
+/* ===== Small phone: ≤400px ===== */
+@media (max-width: 400px){
+  h1{font-size:14px}
+  .main-nav-btn{font-size:11px;padding:7px 2px}
+  #cards{grid-template-columns:1fr 1fr;gap:6px}
+  #cards .card .v{font-size:16px}
+  table.data-cards tr{padding:10px}
+  .log-ts{font-size:11px}
+}
+</style>
+<script>
+/* Runs before <body> is parsed, so the page the user last had is the
+   first one painted. Kept inline and dependency-free on purpose: an
+   external or deferred script would run too late to avoid the flash. */
+(function(){
+  var TABS = ['gateway','analytics','logs','settings'];
+  var pick = null;
+  try {
+    var q = new URLSearchParams(location.search).get('tab');
+    var s = localStorage.getItem('wb-proxy-main-tab');
+    pick = [q, s].find(function(t){ return TABS.indexOf(t) !== -1; }) || 'gateway';
+  } catch(e) { pick = 'gateway'; }
+  window.__MAIN_TAB__ = pick;
+  document.addEventListener('DOMContentLoaded', function(){
+    TABS.forEach(function(t){
+      var page = document.getElementById('page' + t.charAt(0).toUpperCase() + t.slice(1));
+      if(page) page.classList.toggle('active', t === pick);
+      var btn = document.getElementById('btnNav' + t.charAt(0).toUpperCase() + t.slice(1));
+      if(btn) btn.classList.toggle('active', t === pick);
+    });
+  });
+})();
+</script>
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+    <h1><span class="dot" id="statusDot"></span>WorkBuddy 网关看板</h1>
+    <nav class="main-nav">
+      <button class="main-nav-btn active" id="btnNavGateway" onclick="switchMainTab('gateway')">
+        网关与运维
+      </button>
+      <button class="main-nav-btn" id="btnNavAnalytics" onclick="switchMainTab('analytics')">
+        数据指标看板
+      </button>
+      <button class="main-nav-btn" id="btnNavLogs" onclick="switchMainTab('logs')">
+        运行日志
+      </button>
+      <button class="main-nav-btn" id="btnNavSettings" onclick="switchMainTab('settings')">
+        设置
+      </button>
+    </nav>
+<a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
+       title="查看 GitHub 项目仓库" aria-label="GitHub 项目仓库">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+    </a>
+  </div>
+  <div class="meta" id="meta"></div>
+</header>
+<div id="panelGate" style="position:fixed;inset:0;z-index:600;display:none;
+     align-items:center;justify-content:center;padding:20px;background:var(--bg)">
+  <div style="width:min(380px,100%);background:var(--panel);border:1px solid var(--line);
+              border-radius:14px;padding:26px 24px;box-shadow:0 10px 30px rgba(15,23,42,.12)">
+    <div style="font-size:16px;font-weight:700;margin-bottom:6px">WorkBuddy 网关看板</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:18px">请输入面板访问密码</div>
+    <input id="panelPwdInput" type="password" placeholder="面板密码" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter') submitPanelLogin()"
+           style="width:100%;background:var(--panel2);border:1px solid var(--line);
+                  border-radius:8px;padding:9px 12px;color:var(--fg);font:inherit">
+    <div id="panelLoginMsg" style="font-size:12px;color:var(--bad);min-height:17px;margin:8px 0 12px"></div>
+    <button onclick="submitPanelLogin()" style="width:100%;padding:9px 12px;font-size:13px">进入面板</button>
+    <div id="panelDefaultHint" style="display:none;font-size:11px;color:var(--warn);margin-top:12px">
+      当前仍在使用默认密码 <b>admin</b>，登录后请在「设置」中修改。
+    </div>
+  </div>
+</div>
+<main>
+  <div id="pageGateway" class="main-page">
+  <!-- 版本中枢控制栏 (三列等高对齐网格) -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:18px">
+
+    <!-- 卡片 1: 国际版 (Global) -->
+    <div id="tabIntl" class="realm-card active" onclick="switchViewRealm('intl')">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span class="realm-badge-intl">国际版 (Global)</span>
+          <span id="tabIntlDefaultBadge" class="badge ok mini" style="font-weight:600;display:none">默认出口</span>
+          <span id="tabIntlViewBadge" class="badge s mini" style="display:inline-block">当前视图</span>
+        </div>
+      </div>
+      <div class="mono" style="font-size:11px;color:var(--dim);margin-bottom:8px">www.workbuddy.ai</div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px">
+        <div style="display:flex;align-items:baseline;gap:6px">
+          <span id="tabIntlCredits" style="font-size:22px;font-weight:700;color:var(--accent2);letter-spacing:-.5px">0</span>
+          <span style="font-size:12px;color:var(--dim)">剩余积分 · <b id="tabIntlAccts" style="color:var(--fg)">0</b> 账号</span>
+        </div>
+        <span id="tabIntlKeyBadge" class="badge s mini" style="font-weight:600">0 个 Key</span>
+      </div>
+    </div>
+
+    <!-- 卡片 2: 国内版 (China) -->
+    <div id="tabCn" class="realm-card" onclick="switchViewRealm('cn')">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span class="realm-badge-cn">国内版 (China)</span>
+          <span id="tabCnDefaultBadge" class="badge ok mini" style="font-weight:600;display:none">默认出口</span>
+          <span id="tabCnViewBadge" class="badge warn mini" style="display:none">当前视图</span>
+        </div>
+      </div>
+      <div class="mono" style="font-size:11px;color:var(--dim);margin-bottom:8px">copilot.tencent.com</div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px">
+        <div style="display:flex;align-items:baseline;gap:6px">
+          <span id="tabCnCredits" style="font-size:22px;font-weight:700;color:var(--accent2);letter-spacing:-.5px">0</span>
+          <span style="font-size:12px;color:var(--dim)">剩余积分 · <b id="tabCnAccts" style="color:var(--fg)">0</b> 账号</span>
+        </div>
+        <span id="tabCnKeyBadge" class="badge warn mini" style="font-weight:600">0 个 Key</span>
+      </div>
+    </div>
+
+    <!-- 卡片 3: 网关出口控制 -->
+    <div id="cardGatewayCtrl" class="realm-card gateway-ctrl" style="cursor:default">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">网关默认出口</span>
+        <span id="activeGatewayKeyCount" class="badge ok mini" style="font-weight:600">0 个 Key 生效</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin:2px 0 8px">
+        <span id="gatewayDot" class="dot" style="width:9px;height:9px"></span>
+        <span id="activeGatewayName" style="font-size:20px;font-weight:700;color:var(--accent);letter-spacing:-.4px">国际版 (Global)</span>
+      </div>
+      <div style="margin-top:auto">
+        <button class="toggle-realm-btn" id="btnToggleRealm" onclick="toggleActiveGatewayRealm()" style="cursor:pointer;width:100%;padding:7px 12px;font-size:12px">
+          ⇄ 切换默认出口为【国内版】
+        </button>
+      </div>
+    </div>
+
+  </div>
+  <!-- 后台定时调度器状态栏 -->
+  <div id="schedulerBar" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 14px;margin-bottom:16px;font-size:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="dot" id="schedDot"></span>
+      <span>后台定时调度器: <b id="schedStatusText">运行中</b></span>
+      <span style="color:var(--dim);font-size:11px" id="schedTimes"></span>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="sec mini" id="btnTriggerSched" onclick="triggerSchedulerNow(this)">立即巡检保活</button>
+      <button class="sec mini" id="btnToggleSched" onclick="toggleScheduler(this)">暂停调度</button>
+    </div>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>账号<em id="acctCount"></em></h2>
+    <div class="toolbar">
+    <button onclick="openLoginModal()">+ 添加账号 (OAuth)</button>
+    <button class="sec" id="btnCheckin" onclick="doCheckin(this)" style="display:none">每日签到 (国内版)</button>
+    <button class="sec" id="btnDailyChat" onclick="doDailyChat(this)" style="display:none">每日活跃打卡 (国际版)</button>
+    <!-- 入口暂时隐藏：桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted
+         信封），扫描导入只会得到一串无法使用的信封文本，之后每个请求都 401。等解密
+         打通或改走 OAuth 之后再放出来。scanDesktop() 与后端接口都保留未删。 -->
+    <!-- <button class="sec" id="btnScanDesktop" onclick="scanDesktop(this)">扫描桌面客户端账号</button> -->
+    <button class="sec" onclick="exportAccounts(this)">导出账号</button>
+    <button class="sec" onclick="openImport()">导入账号</button>
+    <button class="sec" onclick="fetchCredits(this)">刷新积分</button>
+    <button class="sec" onclick="autoAssignSlots()" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">分配代理出口给未绑定账号</button>
+    <button class="sec" onclick="setAll(true, this)">全部启用</button>
+    <button class="sec" onclick="setAll(false, this)">全部停用</button>
+
+  </div>
+    <div id="accounts"></div>
+  </section>
+
+  <!-- 融合后的：模型性能与用量矩阵 -->
+
+
+  <section>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <h2 style="margin:0">最近请求 <em id="recentCount"></em></h2>
+      <div style="display:inline-flex;align-items:center;gap:8px">
+        <span style="font-size:12px;color:var(--dim)">显示条数:</span>
+        <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
+          <button class="range-btn" id="btnRecentLimit10" onclick="setRecentLimit(10)">10</button>
+          <button class="range-btn" id="btnRecentLimit20" onclick="setRecentLimit(20)">20</button>
+          <button class="range-btn" id="btnRecentLimit50" onclick="setRecentLimit(50)">50</button>
+          <button class="range-btn" id="btnRecentLimit100" onclick="setRecentLimit(100)">100</button>
+        </div>
+      </div>
+    </div>
+    <div id="recent" class="table-wrap"></div>
+    <div id="recentPagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);flex-wrap:wrap;gap:8px">
+      <div id="recentPageInfo">第 1 / 1 页 · 共 0 条记录</div>
+      <div style="display:inline-flex;gap:5px;align-items:center">
+        <button class="sec mini" id="btnRecentPrev" onclick="changeRecentPage(-1)">上一页</button>
+        <div id="recentPageButtons" style="display:inline-flex;gap:3px;align-items:center"></div>
+        <button class="sec mini" id="btnRecentNext" onclick="changeRecentPage(1)">下一页</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 版本模型库与能力清单 -->
+  <section>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h2 style="margin:0">当前版本模型库与能力清单 <em id="availModelCount"></em></h2>
+      <div style="font-size:12px;color:var(--dim)">展示当前视图下官方对话大模型、上下文容量、推理/视觉能力及在售倍率</div>
+    </div>
+    <div style="overflow-x:auto">
+      <table id="modelsTable" class="data-cards">
+        <thead>
+          <tr>
+            <th style="text-align:left;width:220px">模型 ID</th>
+            <th style="text-align:center;width:140px">消费倍率 / 优惠</th>
+            <th style="text-align:center;width:160px">模型能力</th>
+            <th style="text-align:center;width:110px">上下文窗口</th>
+            <th style="text-align:center;width:100px">最大输出</th>
+            <th style="text-align:left">思考档位</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 国内版专属成长任务与日常福利 -->
+  <section id="sectionGrowthTasks" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0">国内版成长任务与日常福利</h2>
+        <div style="font-size:12px;color:var(--dim)">全自动批量接取、事件上报点亮并领取官方成长积分 (+1450分)，以及猫猫日常与打卡</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="growthAcctSelect" onchange="switchGrowthAccount(this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
+          <option value="all">全部国内账号 (批量)</option>
+        </select>
+        <button class="primary" id="btnRunTasks" onclick="runGrowthTasks(this)">一键做任务领积分</button>
+        <button id="btnCatTravel" onclick="triggerCatTravel(this)">猫猫旅行</button>
+      </div>
+    </div>
+
+    <div class="cards" style="margin-bottom:14px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+      <div class="card"><div class="val" id="stkDays">-</div><div class="lbl">连续打卡天数</div></div>
+      <div class="card accent"><div class="val" id="nrgBalance">-</div><div class="lbl">成长能量余额</div></div>
+      <div class="card accent2"><div class="val" id="catState">-</div><div class="lbl" id="catDesc">猫猫日常状态</div></div>
+    </div>
+
+    <div style="overflow-x:auto">
+      <table id="growthTable" class="data-cards">
+        <thead>
+          <tr>
+            <th>任务名称 / 代码</th>
+            <th>任务说明</th>
+            <th>进度</th>
+            <th>奖励</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div id="taskLogBox" style="display:none;margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:12px;font-family:ui-monospace,monospace;line-height:1.6;max-height:220px;overflow-y:auto"></div>
+  </section>
+
+
+  </div><!-- /pageGateway -->
+  <div id="pageAnalytics" class="main-page">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h2 style="margin:0;font-size:16px;color:var(--fg);display:flex;align-items:center;gap:8px">
+          Token 消耗与推理指标透视
+        </h2>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">全维度统计输入/输出/推理 Token、缓存节省效益与各账号各模型用量</div>
+      </div>
+      <div style="display:flex;gap:4px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
+        <button id="btnRangeToday" class="range-btn active" onclick="setAnalyticsRange('today')">今日数据 (Today)</button>
+        <button id="btnRangeAll" class="range-btn" onclick="setAnalyticsRange('all')">全部历史 (All Time)</button>
+      </div>
+    </div>
+
+    <!-- 顶层核心 KPI 弹性看板 -->
+    <div id="analyticsKpiCards" style="margin-bottom:20px">
+      <div class="card think">
+        <div class="k" id="kpiRangeTokenTitle">今日消耗 Token</div>
+        <div class="v" id="kpiTodayTokens">0</div>
+        <div class="s" id="kpiTodayTokensDetail">输入 0 / 输出 0 / 思考 0</div>
+      </div>
+      <div class="card accent">
+        <div class="k">累计消耗 Token</div>
+        <div class="v" id="kpiTotalTokens">0</div>
+        <div class="s" id="kpiTotalTokensDetail">输入 0 / 输出 0 / 思考 0</div>
+      </div>
+      <div class="card accent2">
+        <div class="k">网关平均生成速度</div>
+        <div class="v" id="kpiAvgSpeed">0.0 <span style="font-size:12px;font-weight:400;color:var(--dim)">tok/s</span></div>
+        <div class="s" id="kpiAvgLatency">平均首字延迟 0 ms · 耗时 0 s</div>
+      </div>
+      <div class="card">
+        <div class="k">上下文缓存命中率</div>
+        <div class="v" id="kpiCacheRate">0.0%</div>
+        <div class="s">提示词前缀命中复用比</div>
+      </div>
+      <div class="card">
+        <div class="k" id="kpiReqTitle">今日请求数 & 成功率</div>
+        <div class="v" id="kpiReqCount">0 次</div>
+        <div class="s" id="kpiReqSuccess">成功率 100% · 失败 0</div>
+      </div>
+    </div>
+
+    <!-- 表格 1：各账号用量透视与各模型消耗明细 -->
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h2 style="margin:0">各账号用量透视与模型消耗分布 <em id="analyticsAcctCount"></em></h2>
+        <div style="font-size:12px;color:var(--dim)">支持查看各账号的总消耗及调用的每个具体模型细分占比</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table id="analyticsAccountTable" class="data-cards">
+          <thead>
+            <tr>
+              <th style="text-align:left">账号 (昵称 / UID)</th>
+              <th>所属区域</th>
+              <th>剩余积分 / 额度</th>
+              <th>请求次数</th>
+              <th>消耗总 Token</th>
+              <th>消耗积分 (全出口)</th>
+              <th style="text-align:left">调用的模型分布明细 (请求数 · 消耗)</th>
+            </tr>
+          </thead>
+          <tbody id="analyticsAccountTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 表格 2：模型用量透视与响应指标 -->
+    <section>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h2 style="margin:0">模型性能指标与用量一览 <em id="matrixModelCount"></em></h2>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">
+          账号
+          <select id="matrixAcctFilter" class="slot-select" style="min-width:150px"
+                  onchange="matrixAcctFilter = this.value; if(cachedMatrixData) renderPerfMatrix(cachedMatrixData.usage, cachedMatrixData.perf);">
+            <option value="">全部账号</option>
+          </select>
+        </label>
+        <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">
+          模型
+          <select id="matrixModelFilter" class="slot-select" style="min-width:170px"
+                  onchange="matrixModelFilter = this.value; if(cachedMatrixData) renderPerfMatrix(cachedMatrixData.usage, cachedMatrixData.perf);">
+            <option value="">全部模型</option>
+          </select>
+        </label>
+        <span style="font-size:12px;color:var(--dim)">融合首字延迟 (TTFT)、生成速度、耗时与 Token 统计　·　含国际版与国内版全部渠道</span>
+      </div>
+    </div>
+    <div id="perfMatrix" style="overflow-x:auto"></div>
+    <div class="legend" style="margin-top:12px">
+      <span><i style="background:var(--accent2)"></i>生成速度：平均每秒吐字数 (tok/s)</span>
+      <span><i style="background:var(--think)"></i>思考 Token：DeepSeek/R1 等推理模型的思考量</span>
+      <span><i style="background:var(--accent)"></i>总 Token 占比进度条</span>
+    </div>
+  </section>
+  </div>
+
+
+
+  <div id="pageSettings" class="main-page">
+    <div style="margin-bottom:16px">
+      <h2 style="margin:0;font-size:16px;color:var(--fg)">网关设置</h2>
+    </div>
+
+    <section>
+      <h2>面板访问密码 <em id="setPwdState"></em></h2>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:12px">用于打开本看板。默认密码为 <b>admin</b>，建议立即修改。</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">当前密码</div>
+          <input id="setPwdCurrent" type="password" placeholder="当前密码"
+                 style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">新密码</div>
+          <input id="setPwdNew" type="password" placeholder="至少 4 位"
+                 style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <button onclick="savePanelPassword(this)">修改密码</button>
+      </div>
+    </section>
+
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="margin:0">API Key 与出口绑定 <em id="setKeyState"></em></h2>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">
+            为每个 Key 绑定专属出口。客户端使用该 Key 请求将固定走对应区域，实现双出口并发。
+          </div>
+        </div>
+        <button onclick="addApiKeyRow()">+ 添加 API Key</button>
+      </div>
+      <div id="keyList"></div>
+    </section>
+
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="margin:0">代理槽 <em id="slotState"></em></h2>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">
+            每个账号固定绑定一个出口代理槽。槽位地址变化时绑定账号自动跟随；禁用或删除后回退直连。
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="sec" onclick="discoverProxySlots(this)">自动发现 mihomo 端口</button>
+          <button class="sec" onclick="addProxySlotRow()">+ 添加槽位</button>
+          <button onclick="saveProxySlots(this)">保存槽位</button>
+        </div>
+      </div>
+      <div id="slotList"></div>
+      <div id="slotDiscover"></div>
+    </section>
+
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="margin:0">保留积分 <em id="setReserveState"></em></h2>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">
+            账号余额低于该值时不再接单，避免余额被用尽后触发上游的短信提醒。填 0 表示关闭。
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div style="font-size:12px;color:var(--dim);margin-bottom:4px">最低保留积分</div>
+            <input id="setReserveCredits" type="number" min="0" step="1" value="0"
+                   style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+          </div>
+          <button onclick="saveReserveCredits(this)">保存</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>运行信息</h2>
+      <table>
+        <tbody>
+          <tr><td>当前版本</td><td class="mono" id="setVersion">-</td></tr>
+          <tr><td>账号存储目录</td><td class="mono" id="setAccountsDir">-</td></tr>
+          <tr><td>用量日志目录</td><td class="mono" id="setUsageDir">-</td></tr>
+          <tr><td>设置文件</td><td class="mono" id="setFile">-</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="sec" onclick="loadSettings(true)">刷新</button>
+        <button class="sec" onclick="panelLogout()">退出面板登录</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="pageLogs" class="main-page">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h2 style="margin:0;font-size:16px;color:var(--fg)">网关运行日志</h2>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">实时捕获反向代理请求、流式转发、调度巡检、任务打卡与异常告警 (内存保留最新 2000 条)</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span id="logStatsBadge" style="font-size:12px;color:var(--dim);margin-right:6px">加载中...</span>
+        <button class="sec mini" onclick="fetchNewLogs(true)" title="立即拉取最新日志">刷新</button>
+        <button class="sec mini" id="btnToggleLogAuto" onclick="toggleLogAuto()" style="color:var(--accent2);font-weight:600">实时监听中</button>
+        <button class="sec mini" id="btnToggleLogScroll" onclick="toggleLogScroll()">自动滚屏: 开</button>
+        <button class="sec mini" onclick="copyFilteredLogs()" title="复制当前视图显示的日志">复制</button>
+        <button class="sec mini" onclick="exportLogsFile()" title="下载为 .log 文件">导出</button>
+        <button class="danger mini" onclick="clearServerLogs()" title="清空所有日志">清空</button>
+      </div>
+    </div>
+
+    <!-- 筛选控制工具栏 -->
+    <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;box-shadow:var(--shadow)">
+      <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
+        <button class="range-btn active" id="btnLogLvlAll" onclick="setLogFilterLevel('')">全部级别</button>
+        <button class="range-btn" id="btnLogLvlInfo" onclick="setLogFilterLevel('INFO')">INFO</button>
+        <button class="range-btn" id="btnLogLvlWarn" onclick="setLogFilterLevel('WARN')">WARN</button>
+        <button class="range-btn" id="btnLogLvlError" onclick="setLogFilterLevel('ERROR')">ERROR</button>
+      </div>
+
+      <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
+        <button class="range-btn active" id="btnLogTagAll" onclick="setLogFilterTag('')">全部模块</button>
+        <button class="range-btn" id="btnLogTagChat" onclick="setLogFilterTag('chat')">对话</button>
+        <button class="range-btn" id="btnLogTagTasks" onclick="setLogFilterTag('tasks')">任务福利</button>
+        <button class="range-btn" id="btnLogTagSched" onclick="setLogFilterTag('scheduler')">调度器</button>
+        <button class="range-btn" id="btnLogTagAcct" onclick="setLogFilterTag('accounts')">账号</button>
+        <button class="range-btn" id="btnLogTagSys" onclick="setLogFilterTag('system')">系统</button>
+      </div>
+
+      <div style="flex:1;min-width:180px;position:relative">
+        <input id="logSearchInput" type="text" placeholder="过滤关键字 (如 deepseek, 11128, 401, error)..."
+               oninput="onLogSearchInput()"
+               style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;color:var(--fg);outline:none">
+      </div>
+    </div>
+
+    <!-- 终端视窗 -->
+    <div style="background:#090d16;border:1px solid #1e293b;border-radius:12px;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,.15)">
+      <div style="background:#0f172a;border-bottom:1px solid #1e293b;padding:8px 14px;display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:7px">
+          <span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>
+          <span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block"></span>
+          <span style="width:10px;height:10px;border-radius:50%;background:#10b981;display:inline-block"></span>
+          <span style="font-size:11px;color:#94a3b8;font-family:monospace;margin-left:8px">wb-proxy-console.log</span>
+        </div>
+        <div id="logTerminalStatus" style="font-size:11px;color:#64748b;font-family:monospace">就绪</div>
+      </div>
+      <div id="logTerminalBody" style="height:620px;overflow-y:auto;padding:10px 12px;background:#090d16;color:#cbd5e1" onscroll="handleLogTerminalScroll()">
+        <div class="log-empty">正在拉取网关日志...</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>每 5 秒自动刷新 · 数据来自本机反代 <span class="mono" id="logfile"></span></footer>
+</main>
+
+<div class="modal-mask" id="loginModal">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-hd">
+      <h2>添加 WorkBuddy 账号 (OAuth 授权)</h2>
+      <button class="modal-x" onclick="closeLogin()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd">
+      <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px">
+        <div style="font-size:12px;color:var(--dim);margin-bottom:8px;font-weight:600">选择要登录的版本：</div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+            <input type="radio" name="loginRealm" value="cn" id="radioCn" onchange="switchLoginRealm(this.value)">
+            <span><b>国内版</b> (copilot.tencent.com)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+            <input type="radio" name="loginRealm" value="intl" id="radioIntl" onchange="switchLoginRealm(this.value)">
+            <span><b>国际版</b> (www.workbuddy.ai)</span>
+          </label>
+        </div>
+      </div>
+      <div class="step" id="step1"><div class="n">1</div><div class="t" id="step1Text">正在申请授权登录链接…</div></div>
+      <div class="step" id="step2"><div class="n">2</div><div class="t">在浏览器里打开下方链接并完成登录授权</div></div>
+      <div id="loginLinkBox"></div>
+      <div class="step" id="step3"><div class="n">3</div><div class="t">等待授权回调完成（自动检测）</div></div>
+      <p class="hint" id="loginStatus" style="font-weight:500"></p>
+    </div>
+    <div class="modal-ft">
+      <button class="sec" onclick="closeLogin()">关闭</button>
+      <button onclick="restartLogin()">重新生成链接</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="desktopScanModal">
+  <div class="modal" role="dialog" aria-modal="true" style="width:min(720px,100%)">
+    <div class="modal-hd">
+      <h2>本机桌面客户端账号</h2>
+      <button class="modal-x" onclick="closeDesktopScan()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd">
+      <p class="hint" style="margin-top:0">
+        下面是本机桌面客户端里已登录的账号（只读检测，点击「导入」才会加入网关）。
+        国际版账号归入国际版列表，国内版账号归入国内版列表。
+      </p>
+      <div id="desktopScanBody"><p class="hint">正在检测…</p></div>
+    </div>
+    <div class="modal-ft">
+      <button class="sec" onclick="refreshDesktopScan(this)">重新扫描</button>
+      <button class="sec" onclick="closeDesktopScan()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="importModal">
+  <div class="modal" role="dialog" aria-modal="true" style="width:min(720px,100%)">
+    <div class="modal-hd">
+      <h2>导入账号</h2>
+      <button class="modal-x" onclick="closeImport()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd">
+      <p class="hint" style="margin-top:0">
+        选择一个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象，
+        以及桌面客户端的 <code>{"account":…,"auth":…}</code> 格式。
+      </p>
+      <div id="importBody"><p class="hint">尚未选择文件。</p></div>
+    </div>
+    <div class="modal-ft">
+      <label class="sec" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="importOverwrite" style="margin:0">
+        覆盖同 UID 账号
+      </label>
+      <span style="flex:1"></span>
+      <button class="sec" onclick="closeImport()">取消</button>
+      <button id="btnImportCommit" class="primary" onclick="commitImport(this)" disabled>确认导入</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let loginState = null, loginTimer = null;
+
+function openLogin(){
+  const m = document.getElementById("loginModal");
+  if(m) m.classList.add("show");
+}
+
+function closeLogin(){
+  const m = document.getElementById("loginModal");
+  if(m) m.classList.remove("show");
+  if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
+  if(loginState){ postJSON("/accounts/login/cancel", {state: loginState}).catch(()=>{}); loginState = null; }
+}
+
+function openLoginModal(){
+  openLogin();
+  const isCn = (window.VIEW_REALM === "cn");
+  const rCn = document.getElementById("radioCn");
+  const rIntl = document.getElementById("radioIntl");
+  if(rCn) rCn.checked = isCn;
+  if(rIntl) rIntl.checked = !isCn;
+  triggerLoginForSelectedRealm();
+}
+
+function switchLoginRealm(realm){
+  triggerLoginForSelectedRealm();
+}
+
+function restartLogin(){
+  triggerLoginForSelectedRealm();
+}
+
+async function triggerLoginForSelectedRealm(){
+  const checkedRadio = document.querySelector('input[name="loginRealm"]:checked');
+  const realm = checkedRadio ? checkedRadio.value : (window.VIEW_REALM || "intl");
+  const isCn = (realm === "cn");
+
+  if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
+  if(loginState){ postJSON("/accounts/login/cancel", {state: loginState}).catch(()=>{}); loginState = null; }
+
+  const linkBox = document.getElementById("loginLinkBox");
+  const statusBox = document.getElementById("loginStatus");
+  if(linkBox) linkBox.innerHTML = "";
+  if(statusBox) statusBox.textContent = "";
+
+  const s1 = document.getElementById("step1");
+  const s2 = document.getElementById("step2");
+  const s3 = document.getElementById("step3");
+  if(s1) s1.className = "step active";
+  if(s2) s2.className = "step";
+  if(s3) s3.className = "step";
+
+  const s1Text = document.getElementById("step1Text");
+  if(s1Text) s1Text.textContent = isCn ? "正在向 copilot.tencent.com (国内版) 申请授权..." : "正在向 www.workbuddy.ai (国际版) 申请授权...";
+
+  try{
+    const r = await postJSON("/accounts/login/start", {platform: "CLI", realm: realm});
+    loginState = r.state;
+    if(s1) s1.className = "step done";
+    if(s2) s2.className = "step active";
+    if(linkBox) linkBox.innerHTML =
+      '<a class="login-link" href="' + esc(r.authUrl) + '" target="_blank" rel="noopener">' + esc(r.authUrl) + '</a>'
+      + '<div class="hint">点击上方链接在浏览器里完成登录授权。登录完成后本窗口会自动检测并完成入池。</div>';
+    pollLogin();
+    loginTimer = setInterval(pollLogin, 2500);
+  }catch(e){
+    if(statusBox) statusBox.textContent = "发起失败: " + e.message;
+    if(s1) s1.className = "step";
+  }
+}
+
+async function pollLogin(){
+  if(!loginState) return;
+  try{
+    const r = await getJSON("/accounts/login/poll?state=" + encodeURIComponent(loginState));
+    const s3 = document.getElementById("step3");
+    const statusBox = document.getElementById("loginStatus");
+    if(s3) s3.className = "step active";
+    if(statusBox) statusBox.textContent = r.message || r.status;
+    if(r.status === "ok"){
+      if(s3) s3.className = "step done";
+      if(statusBox) statusBox.textContent = "登录成功：" + (r.account && r.account.nickname) + " 已加入账号池";
+      if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
+      loginState = null;
+      await loadAccounts();
+      setTimeout(closeLogin, 1200);
+    }else if(r.status === "error" || r.status === "expired" || r.status === "unknown"){
+      if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
+    }
+  }catch(e){}
+}
+
+
+window.ACTIVE_GATEWAY_REALM = "intl";
+window.VIEW_REALM = "intl";
+window.REALM_FILTER = "all";
+window.MODELS_DATA = [];
+window.ACCOUNTS = [];
+
+function updateUI(){
+  const isIntlView = (window.VIEW_REALM === "intl");
+  const tIntl = document.getElementById("tabIntl");
+  const tCn = document.getElementById("tabCn");
+  if(tIntl) tIntl.className = "realm-card" + (isIntlView ? " active" : "");
+  if(tCn) tCn.className = "realm-card" + (!isIntlView ? " active" : "");
+  const vbIntl = document.getElementById("tabIntlViewBadge");
+  if(vbIntl) vbIntl.style.display = isIntlView ? "inline-block" : "none";
+  const vbCn = document.getElementById("tabCnViewBadge");
+  if(vbCn) vbCn.style.display = !isIntlView ? "inline-block" : "none";
+
+  const isIntlGw = (window.ACTIVE_GATEWAY_REALM === "intl");
+  const dbIntl = document.getElementById("tabIntlDefaultBadge");
+  if(dbIntl) dbIntl.style.display = isIntlGw ? "inline-block" : "none";
+  const dbCn = document.getElementById("tabCnDefaultBadge");
+  if(dbCn) dbCn.style.display = !isIntlGw ? "inline-block" : "none";
+
+  const gwName = document.getElementById("activeGatewayName");
+  if(gwName) {
+    gwName.textContent = isIntlGw ? "国际版 (Global)" : "国内版 (China)";
+    gwName.style.color = isIntlGw ? "var(--accent)" : "#dc2626";
+  }
+  const ep = document.getElementById("activeEndpoint");
+  if(ep) ep.textContent = isIntlGw ? "https://www.workbuddy.ai/v2" : "https://copilot.tencent.com/v2";
+
+  const btnToggle = document.getElementById("btnToggleRealm");
+  if(btnToggle) {
+    btnToggle.textContent = isIntlGw ? "切换默认出口为【国内版】" : "切换默认出口为【国际版】";
+    btnToggle.style.borderColor = isIntlGw ? "#dc2626" : "var(--accent)";
+    btnToggle.style.color = isIntlGw ? "#dc2626" : "var(--accent)";
+  }
+  const cardGw = document.getElementById("cardGatewayCtrl");
+  if(cardGw){
+    cardGw.style.borderColor = isIntlGw ? "rgba(37,99,235,.28)" : "rgba(220,38,38,.28)";
+    cardGw.style.background = isIntlGw ? "rgba(37,99,235,.03)" : "rgba(220,38,38,.03)";
+  }
+
+  const btnCheckin = document.getElementById("btnCheckin");
+  if(btnCheckin) btnCheckin.style.display = (window.VIEW_REALM === "cn" ? "inline-block" : "none");
+  const btnDailyChat = document.getElementById("btnDailyChat");
+  if(btnDailyChat) btnDailyChat.style.display = (window.VIEW_REALM === "intl" ? "inline-block" : "none");
+
+  // 计算当前绑定与生效的 Key 数量
+  const keys = (typeof API_KEY_ROWS !== 'undefined' && API_KEY_ROWS.length) ? API_KEY_ROWS : (window.API_KEY_ROWS || []);
+  const intlKeys = keys.filter(k => k.enabled !== false && k.realm === 'intl').length;
+  const cnKeys = keys.filter(k => k.enabled !== false && k.realm === 'cn').length;
+  const followKeys = keys.filter(k => k.enabled !== false && !k.realm).length;
+  const activeKeysTotal = isIntlGw ? (intlKeys + followKeys) : (cnKeys + followKeys);
+
+  const elGwKeyBadge = document.getElementById("activeGatewayKeyCount");
+  if(elGwKeyBadge) elGwKeyBadge.textContent = activeKeysTotal + ' 个 Key 生效';
+
+  const elIntlKey = document.getElementById("tabIntlKeyBadge");
+  if(elIntlKey) elIntlKey.textContent = intlKeys + ' 个 Key';
+
+  const elCnKey = document.getElementById("tabCnKeyBadge");
+  if(elCnKey) elCnKey.textContent = cnKeys + ' 个 Key';
+
+  // 左侧卡片账号数与积分统计
+  const allAccts = window.ACCOUNTS || [];
+  const intlAccts = allAccts.filter(a => a.realm === 'intl' || !a.realm);
+  const cnAccts = allAccts.filter(a => a.realm === 'cn');
+
+  let intlCred = 0, hasIntlCred = false;
+  intlAccts.forEach(a => { if(a.credits && a.credits.remain != null){ intlCred += a.credits.remain; hasIntlCred = true; } });
+  let cnCred = 0, hasCnCred = false;
+  cnAccts.forEach(a => { if(a.credits && a.credits.remain != null){ cnCred += a.credits.remain; hasCnCred = true; } });
+
+  const elIntlCred = document.getElementById("tabIntlCredits");
+  if(elIntlCred) elIntlCred.textContent = hasIntlCred ? fmt(intlCred) : "—";
+  const elIntlAcct = document.getElementById("tabIntlAccts");
+  if(elIntlAcct) elIntlAcct.textContent = intlAccts.length;
+
+  const elCnCred = document.getElementById("tabCnCredits");
+  if(elCnCred) elCnCred.textContent = hasCnCred ? fmt(cnCred) : "—";
+  const elCnAcct = document.getElementById("tabCnAccts");
+  if(elCnAcct) elCnAcct.textContent = cnAccts.length;
+};
+
+async function switchViewRealm(r){
+  if(window.VIEW_REALM === r) return;
+  window.VIEW_REALM = r;
+  RECENT_PAGE = 1;
+  window.updateUI();
+  await loadAccounts();
+  await loadModels();
+  await loadGrowthTasks();
+  await loadSchedulerStatus();
+  await loadAnalytics();
+  await refresh();
+};
+
+async function toggleActiveGatewayRealm(){
+  const next = (window.ACTIVE_GATEWAY_REALM === "intl" ? "cn" : "intl");
+  try {
+    const res = await postJSON("/realm", {realm: next});
+    window.ACTIVE_GATEWAY_REALM = res.current || next;
+    toast("网关默认上游已切换并永久保存为: " + (window.ACTIVE_GATEWAY_REALM === "intl" ? "国际版" : "国内版"));
+    window.VIEW_REALM = window.ACTIVE_GATEWAY_REALM;
+    window.updateUI();
+    await loadAccounts();
+    await loadModels();
+    await refresh();
+  }catch(e){
+    alert("切换失败: " + e.message);
+  }
+};
+
+async function refreshActiveRealm(){
+  // Refresh which exit the gateway is switched to. Deliberately does NOT touch
+  // VIEW_REALM: the view is the user's choice, and an account action taken from
+  // one realm's view must not throw them into the other one. Boot-time view
+  // selection (including the ?view= parameter) lives in initRealm().
+  try {
+    const r = await getJSON("/realm");
+    if(r && r.current) window.ACTIVE_GATEWAY_REALM = r.current;
+  } catch(e){}
+}
+
+async function initRealm(){
+  // Boot only - the initial view follows the active exit unless the URL pins it.
+  // Account actions call refreshActiveRealm() instead: reading ?view= here was
+  // what moved the panel back to the other realm after 签到 / 活跃打卡, because
+  // the view buttons do not rewrite the URL.
+  await refreshActiveRealm();
+  window.VIEW_REALM = window.ACTIVE_GATEWAY_REALM;
+  const viewFromUrl = new URLSearchParams(window.location.search).get('view');
+  if(viewFromUrl && ['intl', 'cn'].includes(viewFromUrl)) window.VIEW_REALM = viewFromUrl;
+  const limitFromUrl = new URLSearchParams(window.location.search).get('limit');
+  if(limitFromUrl && [10, 20, 50, 100].includes(parseInt(limitFromUrl, 10))) RECENT_LIMIT = parseInt(limitFromUrl, 10);
+  window.updateUI();
+}
+
+async function loadModels(){
+  try{
+    const r = await getJSON('/v1/models?realm=' + encodeURIComponent(window.VIEW_REALM));
+    MODELS_DATA = r.data || [];
+    renderAvailableModels();
+  }catch(e){
+    console.error('loadModels error:', e);
+  }
+}
+
+function renderAvailableModels(){
+  const tb = document.querySelector('#modelsTable tbody');
+  if(!tb) return;
+  const countEm = document.getElementById('availModelCount');
+  if(countEm) countEm.textContent = '(共 ' + MODELS_DATA.length + ' 个)';
+  if(!MODELS_DATA.length){
+    tb.innerHTML = '<tr><td colspan="6" class="empty">暂无可用模型</td></tr>';
+    return;
+  }
+  tb.innerHTML = MODELS_DATA.map(m => {
+    // 1. 倍率与折扣
+    let credBadge = '-';
+    const c = (m.credits || '').toString().toLowerCase().replace('x', '');
+    if(c === '0.00' || c === '0' || m.id === 'hy3' || m.id === 'hy4-preview-f' || (m.id === 'deepseek-v4.1-flash' && window.VIEW_REALM === 'intl')){
+      credBadge = '<span class="badge ok" style="background:rgba(38,187,130,.15);color:#26bb82">限时免费 0.00x</span>';
+    } else if((m.id === 'glm-5.2' || m.id === 'deepseek-v4-pro') && window.VIEW_REALM === 'cn'){
+      const raw = m.credits ? (m.credits.startsWith('x') ? m.credits.slice(1) + 'x' : m.credits) : '0.79x';
+      credBadge = '<span class="badge s">' + raw + ' <span style="font-size:10px;color:var(--accent)">(夜间0.5x)</span></span>';
+    } else if(m.credits){
+      credBadge = '<span class="badge s">' + esc(m.credits.startsWith('x') ? m.credits.slice(1) + 'x' : m.credits) + '</span>';
+    }
+
+    // 2. 模型能力 (Vision, Tool calls)
+    const caps = [];
+    const hasVis = m.supports_vision || m.vision || m.multimodal || (m.input_modalities && m.input_modalities.includes('image'));
+    if(hasVis){
+      caps.push('<span class="badge ok" style="font-size:11px">视觉</span>');
+    } else {
+      caps.push('<span class="badge" style="color:var(--dim);font-size:11px">文本</span>');
+    }
+    const hasTool = m.supports_tool_calls || (m.capabilities && m.capabilities.tool_calls);
+    if(hasTool){
+      caps.push('<span class="badge ok" style="font-size:11px">工具</span>');
+    }
+    const hasReasoning = m.supports_reasoning || m.reasoning_fixed_effort || (m.reasoning_efforts && m.reasoning_efforts.length);
+    if(hasReasoning){
+      caps.push('<span class="badge" style="background:rgba(124,58,237,.12);color:var(--think);border-color:rgba(124,58,237,.3);font-size:11px;font-weight:600">推理</span>');
+    }
+    const capHtml = caps.join(' ');
+
+    const fmtK = v => {
+      if(!v) return '-';
+      const k = Math.round(v / 1000);
+      return k >= 1000 ? (k / 1000) + 'M' : k + 'K';
+    };
+
+    // 3. 上下文窗口
+    let ctx = '-';
+    if(m.context_length){
+      ctx = '<b>' + fmtK(m.context_length) + '</b>';
+    } else if(m.context_windows && m.context_windows.length){
+      ctx = '<b>' + m.context_windows.map(fmtK).join(' / ') + '</b>';
+    }
+
+    // 4. 最大输出
+    const maxOut = m.max_output_tokens ? ('<b>' + fmtK(m.max_output_tokens) + '</b>') : '-';
+
+    // 5. 思考档位
+    let effort = '<span style="color:var(--dim)">—</span>';
+    const renderEffortBadge = e => {
+      const lvl = String(e || '').toLowerCase();
+      return '<span class="badge-effort">' + esc(lvl) + '</span>';
+    };
+    if(m.reasoning_fixed_effort){
+      effort = renderEffortBadge(m.reasoning_fixed_effort);
+    } else if(m.reasoning_efforts && m.reasoning_efforts.length === 1){
+      effort = renderEffortBadge(m.reasoning_efforts[0]);
+    } else if(m.reasoning_efforts && m.reasoning_efforts.length){
+      effort = m.reasoning_efforts.map(renderEffortBadge).join(' ');
+    } else if(m.supports_reasoning){
+      effort = '<span class="badge-effort">原生</span>';
+    }
+
+    return '<tr>'
+      + '<td style="text-align:left" class="mono" data-label="模型 ID"><b>' + esc(m.id) + '</b></td>'
+      + '<td style="text-align:center" data-label="消费倍率">' + credBadge + '</td>'
+      + '<td style="text-align:center" data-label="能力">' + capHtml + '</td>'
+      + '<td style="text-align:center" data-label="上下文">' + ctx + '</td>'
+      + '<td style="text-align:center" data-label="最大输出">' + maxOut + '</td>'
+      + '<td style="text-align:left" data-label="思考档位">' + effort + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+let CURRENT_GROWTH_UID = 'all';
+
+async function switchGrowthAccount(uid){
+  CURRENT_GROWTH_UID = uid;
+  await loadGrowthTasks();
+}
+
+async function loadGrowthTasks(){
+  const sec = document.getElementById("sectionGrowthTasks");
+  if(!sec) return;
+  if(window.VIEW_REALM !== 'cn'){
+    sec.style.display = 'none';
+    return;
+  }
+  sec.style.display = 'block';
+  try{
+    const q = (CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all') ? ('?uid=' + encodeURIComponent(CURRENT_GROWTH_UID)) : '';
+    const r = await getJSON('/tasks' + q);
+    const tasks = r.tasks || [];
+    const sum = r.summary || {};
+    const accts = r.accounts || [];
+    const streak = sum.streak_days || 0;
+    const energy = sum.energy || 0;
+    const tr = sum.travel || {};
+
+    const sel = document.getElementById("growthAcctSelect");
+    if(sel && accts.length){
+      const opts = ['<option value="all"' + (CURRENT_GROWTH_UID === 'all' ? ' selected' : '') + '>全部国内账号 (批量)</option>']
+        .concat(accts.map(a => '<option value="' + esc(a.uid) + '"' + (CURRENT_GROWTH_UID === a.uid ? ' selected' : '') + '>' + esc(a.nickname) + ' (' + esc(a.uid.slice(0,6)) + ')</option>'))
+        .join('');
+      sel.innerHTML = opts;
+    }
+
+    const elStk = document.getElementById("stkDays");
+    if(elStk) elStk.textContent = streak + ' 天';
+    const elNrg = document.getElementById("nrgBalance");
+    if(elNrg) elNrg.textContent = energy;
+
+    const elCat = document.getElementById("catState");
+    const elCatDesc = document.getElementById("catDesc");
+    if(elCat){
+      if(tr.state === 'arrived') {
+        elCat.innerHTML = '<span style="color:#26bb82">旅行归来！待领奖</span>';
+        if(elCatDesc) elCatDesc.textContent = '获得奖励 +' + (tr.reward_credit || 0) + ' 积分';
+      } else if(tr.state === 'traveling') {
+        elCat.innerHTML = '<span style="color:var(--accent)">旅行中...</span>';
+        if(elCatDesc) elCatDesc.textContent = '预计稍后归来';
+      } else if(tr.daily_limit_reached) {
+        elCat.textContent = '今日次数已用尽';
+        if(elCatDesc) elCatDesc.textContent = '次日 00:00 刷新';
+      } else {
+        elCat.textContent = '在家待命中';
+        if(elCatDesc) elCatDesc.textContent = '随时可出发旅行';
+      }
+    }
+
+    const tb = document.querySelector("#growthTable tbody");
+    if(!tb) return;
+    if(!tasks.length){
+      tb.innerHTML = '<tr><td colspan="5" class="empty">暂无任务或未登录国内版账号</td></tr>';
+      return;
+    }
+    tb.innerHTML = tasks.map(t => {
+      let stBadge = '<span class="badge">' + esc(t.status) + '</span>';
+      if(t.status === 'claimed'){
+        stBadge = '<span class="badge off">已领取</span>';
+      } else if(t.status === 'completed' || t.current >= t.target){
+        stBadge = '<span class="badge ok">待领奖</span>';
+      } else if(t.status === 'accepted' || t.status === 'in_progress'){
+        stBadge = '<span class="badge s">进行中</span>';
+      } else if(t.status === 'not_accepted'){
+        stBadge = '<span class="badge">未接取</span>';
+      }
+      const prog = (t.status === 'claimed' || t.status === 'completed') ? '已达成' : (t.current + ' / ' + t.target);
+      const rwd = (t.reward_credit ? ('<b style="color:var(--accent2)">+' + t.reward_credit + '</b> 积分') : '') +
+                  (t.reward_energy ? (' <span style="color:var(--accent)">+' + t.reward_energy + ' 能量</span>') : '');
+      return '<tr>'
+        + '<td data-label="任务"><b>' + esc(t.name) + '</b><br><span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t.task_code) + '</span></td>'
+        + '<td style="font-size:12px;color:var(--dim);max-width:300px" data-label="说明">' + esc(t.description || '-') + '</td>'
+        + '<td data-label="进度">' + prog + '</td>'
+        + '<td data-label="奖励">' + (rwd || '-') + '</td>'
+        + '<td data-label="状态">' + stBadge + '</td>'
+        + '</tr>';
+    }).join('');
+  }catch(e){
+    console.error('loadGrowthTasks error:', e);
+  }
+}
+
+async function runGrowthTasks(btn){
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = '任务执行中...';
+  const logBox = document.getElementById("taskLogBox");
+  if(logBox){
+    logBox.style.display = 'block';
+    logBox.innerHTML = '<div style="color:var(--accent)">[task_runner] 正在启动全自动任务接取、事件上报与奖励领取流水...</div>';
+  }
+  try{
+    const payload = {};
+    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all'){
+      payload.uid = CURRENT_GROWTH_UID;
+    }
+    const r = await postJSON("/tasks/run", payload);
+    const logs = r.logs || [];
+    if(logBox){
+      logBox.innerHTML = logs.map(l => '<div>' + esc(l) + '</div>').join('');
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+    await loadAccounts();
+    await loadGrowthTasks();
+    const sumC = r.credit_added != null ? ('，共增加 +' + r.credit_added + ' 积分') : '';
+    toast("成长任务流水执行完成" + sumC + "！");
+  }catch(e){
+    if(logBox) logBox.innerHTML += '<div style="color:var(--warn)">执行出错: ' + esc(e.message) + '</div>';
+    alert("任务执行失败: " + e.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
+}
+
+async function triggerCatTravel(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '旅行中...'; }
+  try{
+    const payload = {};
+    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all'){
+      payload.uid = CURRENT_GROWTH_UID;
+    }
+    const r = await postJSON("/tasks/travel", payload);
+    toast(r.msg || (r.ok ? "猫猫旅行结算完成" : "操作失败"), r.ok ? "ok" : "warn");
+    await loadAccounts();
+    await loadGrowthTasks();
+  }catch(e){
+    toast("猫猫旅行失败: " + e.message, "bad");
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '猫猫旅行'; }
+  }
+}
+
+async function loadSchedulerStatus(){
+  try{
+    const s = await getJSON("/scheduler");
+    const bar = document.getElementById("schedulerBar");
+    if(!bar) return;
+    const dot = document.getElementById("schedDot");
+    const txt = document.getElementById("schedStatusText");
+    const times = document.getElementById("schedTimes");
+    const btn = document.getElementById("btnToggleSched");
+    const btnTrig = document.getElementById("btnTriggerSched");
+
+    if(dot) dot.className = s.enabled ? 'dot' : 'dot off';
+    const modeText = (window.VIEW_REALM === 'intl')
+      ? (s.mode_intl || '账号 Token 自动保活与凭证常驻 (每日 22:00 集中巡检)')
+      : (s.mode_cn || s.mode || '整点排程');
+    if(txt) txt.textContent = s.enabled ? ('运行中 · ' + modeText) : '已暂停';
+    if(times) times.textContent = '上次: ' + (s.last_run_time || '-') + ' · 下次: ' + (s.next_run_time || '-');
+    if(btn) btn.textContent = s.enabled ? '暂停调度' : '启用调度';
+    if(btnTrig) btnTrig.textContent = (window.VIEW_REALM === 'intl') ? '立即保活刷新' : '立即巡检保活';
+  }catch(e){}
+}
+
+async function triggerSchedulerNow(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '巡检中...'; }
+  try{
+    const r = await postJSON("/scheduler/trigger", {});
+    toast(r.msg || "已触发巡检保活", "ok");
+    setTimeout(loadSchedulerStatus, 2000);
+  }catch(e){
+    toast("触发失败: " + e.message, "bad");
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = (window.VIEW_REALM === 'intl') ? '立即保活刷新' : '立即巡检保活'; }
+  }
+}
+
+async function toggleScheduler(btn){
+  if(btn){ btn.disabled = true; }
+  try{
+    const r = await postJSON("/scheduler/toggle", {});
+    await loadSchedulerStatus();
+    toast("后台调度器已" + (r.enabled ? "启用" : "暂停"), "ok");
+  }catch(e){
+    toast("切换失败: " + e.message, "bad");
+  }finally{
+    if(btn){ btn.disabled = false; }
+  }
+}
+function filterRealm(m){
+  REALM_FILTER = m;
+  document.getElementById("fltAll").className = m === "all" ? "active" : "";
+  document.getElementById("fltIntl").className = m === "intl" ? "active" : "";
+  document.getElementById("fltCn").className = m === "cn" ? "active" : "";
+  renderAccounts();
+}
+async function doCheckin(btn){
+  btn.disabled = true; const ot = btn.textContent; btn.textContent = "签到中...";
+  try {
+    const r = await postJSON("/accounts/checkin", {});
+    const res = r.results || [];
+    if(!res.length) toast("未发现国内版账号", "warn");
+    else {
+      const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "签到成功" : (x.error||x.msg))).join("；");
+      toast("每日签到: " + summary, res.some(x => x.ok) ? "ok" : "warn");
+    }
+    await refreshActiveRealm(); window.updateUI(); loadAccounts(); loadModels();
+  }catch(e){ toast("签到失败: " + e.message, "bad"); }
+  finally { btn.disabled = false; btn.textContent = ot; }
+}
+
+async function doDailyChat(btn){
+  btn.disabled = true; const ot = btn.textContent; btn.textContent = "打卡中...";
+  try {
+    const r = await postJSON("/accounts/daily-chat", {});
+    const res = r.results || [];
+    if(!res.length) toast("未发现国际版账号", "warn");
+    else {
+      const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "活跃打卡成功" : (x.error||x.msg))).join("；");
+      toast("每日活跃: " + summary, res.some(x => x.ok) ? "ok" : "warn");
+    }
+    await refreshActiveRealm(); window.updateUI(); loadAccounts(); loadModels();
+  }catch(e){ toast("打卡失败: " + e.message, "bad"); }
+  finally { btn.disabled = false; btn.textContent = ot; }
+}
+
+const fmt = n => (n ?? 0).toLocaleString('en-US');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ms = v => v == null ? '—' : (v >= 1000 ? (v/1000).toFixed(2) + ' s' : Math.round(v) + ' ms');
+const pct = v => v == null ? '—' : v.toFixed(1) + '%';
+// 输入 / 输出 / 思考 三个数字，各自一色，斜杠分隔。思考为 0 也写出来，
+// 列的形状因此固定，不会因某个模型不推理就缩短。
+const tripleTokens = (inp, out, think) =>
+  '<span style="color:var(--accent)">' + fmt(inp || 0) + '</span>' +
+  ' <span style="color:var(--dim-light)">/</span> ' +
+  '<span style="color:var(--accent2)">' + fmt(out || 0) + '</span>' +
+  ' <span style="color:var(--dim-light)">/</span> ' +
+  '<span style="color:var(--think)">' + fmt(think || 0) + '</span>';
+
+function perfRow(label, b, unit, fmtFn, color){
+  if(!b) return '<tr><td>' + label + '</td><td colspan="5" style="color:var(--dim)">暂无数据</td></tr>';
+  const f = fmtFn || (v => v);
+  const dot = color ? ' <i style="display:inline-block;width:7px;height:7px;border-radius:2px;background:' + color + ';margin-left:6px"></i>' : '';
+  return '<tr><td>' + label + dot + '</td>'
+    + '<td><b>' + f(b.avg) + '</b>' + unit + '</td>'
+    + '<td>' + f(b.p50) + unit + '</td>'
+    + '<td>' + f(b.p90) + unit + '</td>'
+    + '<td>' + f(b.p99) + unit + '</td>'
+    + '<td style="color:var(--dim)">' + b.samples + ' 次</td></tr>';
+}
+
+function card(k, v, sub, cls){
+  return '<div class="card ' + (cls||'') + '"><div class="k">' + k + '</div>'
+    + '<div class="v">' + v + '</div>' + (sub ? '<div class="s">' + sub + '</div>' : '') + '</div>';
+}
+
+/* ---- api key handling ---- */
+const KEY_STORE = 'wb-proxy-api-key';
+const PANEL_STORE = 'wb-proxy-panel-token';
+let API_KEY = '';
+let PANEL_TOKEN = '';
+try { PANEL_TOKEN = sessionStorage.getItem(PANEL_STORE) || ''; } catch(e) { PANEL_TOKEN = ''; }
+let PANEL_STATUS = {};
+(function initKey(){
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('key');
+    if(fromUrl){
+      API_KEY = fromUrl.trim();
+      localStorage.setItem(KEY_STORE, API_KEY);
+      // Drop the key from the address bar, but keep any other parameters:
+      // this used to clear the whole query string, which also discarded a
+      // ?tab= the user had been given.
+      const rest = new URLSearchParams(window.location.search);
+      rest.delete('key');
+      const qs = rest.toString();
+      history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
+    } else {
+      API_KEY = (localStorage.getItem(KEY_STORE) || '').trim();
+    }
+  } catch(e){ API_KEY = ''; }
+})();
+
+// A key with non-ASCII characters cannot go into an HTTP header at all: fetch
+// throws "String contains non ISO-8859-1 code point" before the request is
+// sent. Such a value is never a real gateway key, so drop it and let the panel
+// session carry the request.
+function usableKey(value){
+  return value && /^[\x20-\x7e]+$/.test(value) ? value : '';
+}
+
+function authHeaders(base){
+  const h = Object.assign({}, base || {});
+  const key = usableKey(API_KEY);
+  if(key) h['Authorization'] = 'Bearer ' + key;
+  if(PANEL_TOKEN) h['X-Panel-Token'] = PANEL_TOKEN;
+  return h;
+}
+
+async function getJSON(url){
+  const r = await fetch(url, {cache:'no-store', headers: authHeaders()});
+  if(r.status === 401 || r.status === 403){ panelSessionLost(); throw new Error('unauthorized'); }
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
+}
+async function postJSON(url, body){
+  const r = await fetch(url, {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
+                              body: JSON.stringify(body || {})});
+  const t = await r.text();
+  let parsed = {};
+  try { parsed = t ? JSON.parse(t) : {}; } catch(e) { parsed = {raw: t}; }
+  if(r.status === 401 || r.status === 403){ panelSessionLost(); throw new Error('unauthorized'); }
+  if(!r.ok) throw new Error((parsed.error && parsed.error.message) || r.status);
+  return parsed;
+}
+function toast(msg, kind){
+  console.log('[wb]', msg);
+  // An expired session already raised the gate; a toast per failing poll
+  // would repeat the same line every few seconds until the user logs in.
+  if(String(msg).indexOf('unauthorized') !== -1) return;
+  let box = document.getElementById('toastBox');
+  if(!box){
+    box = document.createElement('div');
+    box.id = 'toastBox';
+    box.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:9999;'
+      + 'display:flex;flex-direction:column;gap:10px;align-items:flex-end;pointer-events:none';
+    document.body.appendChild(box);
+  }
+  const item = document.createElement('div');
+  const isBad = (kind === 'bad' || kind === 'err' || kind === 'error');
+  const isWarn = (kind === 'warn' || kind === 'warning');
+  const isOk = (kind === 'ok' || kind === 'success');
+  const borderColor = isBad ? 'var(--bad)' : (isWarn ? 'var(--warn)' : (isOk ? 'var(--accent2)' : 'var(--accent)'));
+  const textColor = isBad ? '#b91c1c' : (isWarn ? '#b45309' : (isOk ? '#15803d' : 'var(--fg)'));
+  const icon = '';
+  const bg = isBad ? 'rgba(254,242,242,.98)' : (isWarn ? 'rgba(255,251,235,.98)' : 'var(--panel)');
+
+  item.textContent = icon + msg;
+  item.style.cssText = 'background:' + bg + ';border:1px solid var(--line);'
+    + 'border-left:4px solid ' + borderColor + ';'
+    + 'border-radius:8px;padding:10px 16px;font-size:13px;font-weight:500;color:' + textColor + ';'
+    + 'box-shadow:0 10px 25px -5px rgba(0,0,0,.15),0 8px 10px -6px rgba(0,0,0,.1);'
+    + 'max-width:380px;word-break:break-all;pointer-events:auto;transition:all .2s ease;';
+  box.appendChild(item);
+  setTimeout(() => {
+    item.style.opacity = '0';
+    item.style.transform = 'translateY(6px)';
+    setTimeout(() => item.remove(), 250);
+  }, 4200);
+}
+
+/* ------------------------------- accounts ------------------------------- */
+let USAGE_BY_ACCOUNT = {};
+
+/* The API sends epoch seconds; display the recovery in the browser's local time. */
+function fmtCoolAt(epoch){
+  const seconds = Number(epoch);
+  if(!Number.isFinite(seconds) || seconds <= 0) return '';
+  const d = new Date(seconds * 1000);
+  if(!Number.isFinite(d.getTime())) return '';
+  const two = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate())
+    + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
+}
+function coolPills(a){
+  const list = a && Array.isArray(a.modelCooldowns) ? a.modelCooldowns : [];
+  const pills = list.map(c => {
+    const at = c && fmtCoolAt(c.expiresAt);
+    return at ? '<span class="cool-pill" title="该账号仅此模型受限；时间为本地时间">'
+      + esc(c.model) + ' · ' + at + ' 恢复</span>' : '';
+  }).filter(Boolean);
+  return pills.length ? '<div class="cool-list">' + pills.join('') + '</div>' : '';
+}
+
+function accountRow(a){
+  const realmBadge = a.realm === 'cn'
+    ? '<span class="realm-badge-cn">国内版</span>'
+    : '<span class="realm-badge-intl">国际版</span>';
+  // Inline handlers embed these in an HTML attribute, so they must survive
+  // both the attribute and the quoted JS string. uid comes from an upstream
+  // JWT; treat it as untrusted and keep it to a safe charset.
+  const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
+  const nameAttr = esc(String(a.nickname || '').replace(/["'\\<>]/g, ''));
+  const usage = USAGE_BY_ACCOUNT[a.uid] || {};
+  const state = !a.enabled ? '<span class="badge off">已停用</span>'
+              : a.reserveBlocked ? '<span class="badge warn">保留积分</span>'
+              : a.inCooldown ? '<span class="badge warn">冷却 ' + (a.cooldownFor||0) + 's</span>'
+              : a.expiresIn === 'expired' ? '<span class="badge bad">已过期</span>'
+              : '<span class="badge ok">可用</span>';
+  const pills = coolPills(a);
+  const err = a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')
+    ? '<div class="hint" style="color:var(--warn);margin:2px 0 0">' + esc(a.lastError) + '</div>' : '';
+  const cred = a.credits;
+  const credText = cred ? ('<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b> / ' + fmt(cred.size)) : '<span style="color:var(--dim)">未查询</span>';
+  return '<tr>'
+    + '<td style="text-align:center;white-space:nowrap" data-label="版本">' + realmBadge + '</td>'
+    + '<td style="text-align:left" data-label="账号">'
+    +   '<div style="font-weight:600;font-size:13px;color:var(--fg)">' + esc(a.nickname) + '</div>'
+    + '<div class="mono" style="color:var(--dim);font-size:11px">' + esc(a.uid.slice(0,8)) + ' · ' + esc(a.source) + ' · 到期 ' + esc(a.expiresIn || '?') + '</div>'
+    + (a.machineId ? ('<div class="mono" style="color:var(--dim);font-size:10px;margin-top:2px" title="由账号UID稳定派生的专属设备码，防多号关联风控">设备码: ' + esc(a.machineId.slice(0,14)) + '...</div>') : '')
+    + err + pills + '</td>'
+    + '<td style="text-align:center" data-label="状态">' + state + '</td>'
+    + '<td style="text-align:center" data-label="出口">' + slotSelectHtml(a) + '</td>'
+    + '<td style="text-align:left;white-space:nowrap" data-label="积分">' + credText + '</td>'
+    + '<td style="text-align:right" data-label="请求">' + fmt(usage.requests) + '</td>'
+    + '<td style="text-align:right" data-label="总 token">' + fmt(usage.total_tokens) + '</td>'
+    + '<td style="text-align:right" data-label="缓存">' + fmt(usage.cached_tokens) + '</td>'
+    + '<td class="acct-actions" style="text-align:center;white-space:nowrap;vertical-align:middle">'
+    + '<div class="acct-actions-col">'
+    +   '<div class="acct-actions-row">'
+    +     '<button class="sec mini" onclick="toggleAccount(&quot;' + uidAttr + '&quot;,' + (!a.enabled) + ', this)">' + (a.enabled ? '停用' : '启用') + '</button>'
+    +     '<button class="sec mini" onclick="testAccount(&quot;' + uidAttr + '&quot;, this)">测试</button>'
+    +     '<button class="sec mini" onclick="refreshOne(&quot;' + uidAttr + '&quot;, this)">刷新凭证</button>'
+    +   '</div>'
+    +   '<div class="acct-actions-row">'
+    +     '<div class="id-btn-group" title="出站身分：默认 WorkBuddy 桌面端 (WB) / 官方 VSCode 插件 (VSC) / 官方 CodeBuddy CLI (CLI)">'
+    +       '<button class="id-btn' + ((!a.product || a.product === 'workbuddy') ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;workbuddy&quot;, this)">WB</button>'
+    +       '<button class="id-btn' + (a.product === 'vscode' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;vscode&quot;, this)">VSC</button>'
+    +       '<button class="id-btn' + (a.product === 'cli' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;cli&quot;, this)">CLI</button>'
+    +     '</div>'
+    +     '<button class="sec mini" onclick="exportOne(&quot;' + uidAttr + '&quot;)">导出</button>'
+    +     '<button class="danger mini" onclick="deleteAccount(&quot;' + uidAttr + '&quot;,&quot;' + nameAttr + '&quot;, this)">删除</button>'
+    +   '</div>'
+    + '</div>'
+    + '</td></tr>';
+}
+
+function renderAccounts(){
+  const box = document.getElementById('accounts');
+  const currentView = (window.VIEW_REALM || "intl");
+  let list = (window.ACCOUNTS || []).filter(a => !a.realm || a.realm === currentView);
+  // Enabled accounts first; disabled ones sink to the bottom. Within each
+  // group keep the server order stable so the table does not jump around.
+  list = list.map((a, i) => [a, i])
+    .sort((x, y) => (x[0].enabled === y[0].enabled) ? (x[1] - y[1]) : (x[0].enabled ? -1 : 1))
+    .map(pair => pair[0]);
+  const usable = list.filter(a => a.enabled).length;
+  const viewName = currentView === 'cn' ? '国内版' : '国际版';
+  document.getElementById('acctCount').textContent =
+    list.length ? ('（' + viewName + '共 ' + list.length + ' 个，启用 ' + usable + ' 个）') : '';
+  if(!list.length){
+    box.innerHTML =
+      '<div style="text-align:center;padding:30px 16px">'
+      + '<div style="font-size:15px;margin-bottom:8px">当前' + viewName + '还没有账号</div>'
+      + '<div style="color:var(--dim);font-size:13px;margin-bottom:18px">'
+      +   '请先登录或导入一个 ' + viewName + ' 账号，之后相关请求都会走该账号'
+      + '</div>'
+      + '<button onclick="startLogin()" style="font-size:14px;padding:10px 22px">'
+      +   '登录新账号 (OAuth)'
+      + '</button>'
+      + '</div>';
+    return;
+  }
+  box.innerHTML = '<div class="table-wrap"><table class="data-cards account-cards"><thead><tr>'
+    + '<th style="text-align:center;width:76px">版本</th>'
+    + '<th style="text-align:left">账号</th>'
+    + '<th style="text-align:center;width:84px">状态</th>'
+    + '<th style="text-align:center;width:150px">出口</th>'
+    + '<th style="text-align:left;width:120px">积分</th>'
+    + '<th style="text-align:right;width:70px">请求</th>'
+    + '<th style="text-align:right;width:88px">总 token</th>'
+    + '<th style="text-align:right;width:80px">缓存</th>'
+    + '<th style="text-align:center;width:232px">操作</th>'
+    + '</tr></thead><tbody>' + list.map(accountRow).join('') + '</tbody></table></div>'
+    + '<div class="legend"><span>出站身分：WB = WorkBuddy 独立桌面客户端（默认），VSC = 官方 VSCode 插件，CLI = 官方 CodeBuddy CLI；三者对应不同的出站指纹与配额通道。</span></div>'
+    + '<div class="legend"><span>多个账号按会话粘性 + 轮询使用；某个账号被上游拒绝时自动切到下一个</span></div>';
+}
+
+async function loadAccounts(){
+  try{
+    const [acct, byAcct] = await Promise.all([getJSON('/accounts?realm=all'), getJSON('/usage/by-account')]);
+    window.ACCOUNTS = acct.accounts || [];
+    USAGE_BY_ACCOUNT = {};
+    (byAcct.accounts || []).forEach(a => { USAGE_BY_ACCOUNT[a.account] = a; });
+    await loadProxySlots();
+    renderAccounts();
+    updateUI();
+    // Auto-fetch credits once if not present
+    if(window.ACCOUNTS.length && window.ACCOUNTS.some(a => !a.credits)){
+      postJSON('/accounts/credits', {}).then(r => {
+        window.ACCOUNTS = r.accounts || ACCOUNTS;
+        renderAccounts();
+      }).catch(()=>{});
+    }
+  }catch(e){ toast('账号加载失败: ' + e.message); }
+}
+
+async function fetchCredits(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '刷新中...'; }
+  const currentView = (window.VIEW_REALM || "intl");
+  const viewName = currentView === 'cn' ? '国内版' : '国际版';
+  try{
+    const r = await postJSON('/accounts/credits', {realm: currentView});
+    await loadAccounts();
+    refresh();
+    const count = (r.results || []).length;
+    toast('已成功刷新当前' + viewName + ' ' + count + ' 个账号的积分', 'ok');
+  }catch(e){
+    toast('刷新积分失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '刷新积分'; }
+  }
+}
+const queryCredits = fetchCredits;
+
+async function toggleAccount(uid, enable, btn){
+  if(btn) btn.disabled = true;
+  try{
+    await postJSON('/accounts/set', {uid: uid, enabled: enable});
+    await loadAccounts();
+    toast(enable ? '账号已成功启用' : '账号已停用', 'ok');
+  }catch(e){
+    toast('操作失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+async function setAccountProduct(uid, prod, btn){
+  const names = {
+    'workbuddy': 'WorkBuddy 独立桌面客户端 (WB)',
+    'vscode': '官方 VSCode 插件 (VSC)',
+    'cli': '官方 CodeBuddy CLI (CLI)'
+  };
+  const label = names[prod] || prod;
+  if(!confirm('将该账号的出站身分切换为 ' + label + '？\n\n不同身分对应不同的出站指纹、端点和配额通道。')) return;
+  if(btn){ btn.disabled = true; }
+  try {
+    const r = await postJSON('/accounts/product', {uid: uid, product: prod});
+    toast('已切换为 ' + label, 'ok');
+    await loadAccounts();
+  } catch(e) {
+    toast('切换失败: ' + e.message, 'bad');
+  } finally {
+    if(btn){ btn.disabled = false; }
+  }
+}
+async function switchProduct(uid, btn){ return setAccountProduct(uid, 'workbuddy', btn); }
+
+async function refreshOne(uid, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '刷新中...'; }
+  try{
+    const r = await postJSON('/accounts/refresh', {uid: uid});
+    const ok = (r.results||[])[0];
+    toast(ok && ok.ok ? '账号凭证刷新成功' : ('刷新失败: ' + (ok && ok.error || '未知错误')), ok && ok.ok ? 'ok' : 'bad');
+    await loadAccounts();
+  }catch(e){
+    toast('刷新失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '刷新凭证'; }
+  }
+}
+async function testAccount(uid, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '测试中...'; }
+  try{
+    const r = await postJSON('/accounts/test', {uid: uid});
+    if(r.ok){
+      toast('测试通过 (' + r.elapsed_ms + 'ms) [' + r.model + ']: ' + (r.reply || '正常'), 'ok');
+    } else {
+      toast('测试失败: ' + (r.error || r.status || '异常'), 'bad');
+    }
+    await loadAccounts();
+  }catch(e){
+    toast('测试请求失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '测试'; }
+  }
+}
+async function refreshAccounts(){
+  try{ const r = await postJSON('/accounts/refresh', {});
+       const okc = (r.results||[]).filter(x=>x.ok).length;
+       toast('刷新完成: ' + okc + '/' + (r.results||[]).length);
+       await loadAccounts(); }
+  catch(e){ toast(e.message); }
+}
+async function setAll(enable, btn){
+  if(btn) btn.disabled = true;
+  try{
+    await postJSON('/accounts/set-all', {enabled: enable});
+    await loadAccounts();
+    toast(enable ? '已全部启用所有账号' : '已全部停用所有账号', 'ok');
+  }catch(e){
+    toast('批量操作失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+async function deleteAccount(uid, name, btn){
+  if(!confirm("确定删除账号 " + name + "？")) return;
+  if(btn) btn.disabled = true;
+  try{
+    await postJSON('/accounts/delete', {uid: uid});
+    await loadAccounts();
+    toast('已成功删除账号 ' + name, 'ok');
+  }catch(e){
+    toast('删除失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+/* ---- 账号导出 / 导入 ---- */
+async function downloadExport(query, fallbackLabel){
+  // Fetch through the authorised JSON API and save the blob client-side.
+  // A plain <a href> would not carry the X-Panel-Token header, so a
+  // password-only session would be rejected.
+  const r = await fetch('/accounts/export' + (query || ''), {cache:'no-store', headers: authHeaders()});
+  if(r.status === 401 || r.status === 403){ panelSessionLost(); throw new Error('unauthorized'); }
+  if(r.status === 404){
+    let msg = '账号不存在';
+    try{ const e = await r.json(); msg = (e.error && e.error.message) || msg; }catch(_){}
+    throw new Error(msg);
+  }
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  const text = await r.text();
+  let doc;
+  try{ doc = JSON.parse(text); }catch(e){ throw new Error('返回内容不是 JSON'); }
+  const stamp = new Date().toISOString().slice(0,19).replace(/[-:T]/g,'');
+  const name = 'workbuddy-accounts-' + (fallbackLabel || '') + stamp + '.json';
+  const blob = new Blob([text], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return {count: doc.count || 0, name: name};
+}
+
+async function exportAccounts(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '导出中...'; }
+  try{
+    const r = await downloadExport('', '');
+    toast('已导出 ' + r.count + ' 个账号 → ' + r.name);
+  }catch(e){
+    toast('导出失败: ' + e.message, 'err');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '导出账号'; }
+  }
+}
+
+async function exportOne(uid){
+  // Same document format as the bulk export, just narrowed to one account, so
+  // the file can be re-imported on another instance without editing.
+  try{
+    const r = await downloadExport('?uid=' + encodeURIComponent(uid), uid.slice(0,8) + '-');
+    toast('已导出 1 个账号 → ' + r.name);
+  }catch(e){
+    toast('导出失败: ' + e.message, 'err');
+  }
+}
+
+let importRows = null;   // 已解析、待导入的账号行
+
+function openImport(){
+  importRows = null;
+  const m = document.getElementById('importModal');
+  const body = document.getElementById('importBody');
+  const ow = document.getElementById('importOverwrite');
+  if(ow) ow.checked = false;
+  if(body) body.innerHTML = '<p class="hint">正在打开文件…</p>';
+  if(m) m.classList.add('show');
+  // The picker is created per call so choosing the same file twice still fires.
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  picker.accept = '.json,application/json';
+  picker.onchange = () => {
+    const f = picker.files && picker.files[0];
+    if(!f){ closeImport(); return; }
+    readImportFile(f);
+  };
+  picker.click();
+}
+
+function closeImport(){
+  const m = document.getElementById('importModal');
+  if(m) m.classList.remove('show');
+  importRows = null;
+  const btn = document.getElementById('btnImportCommit');
+  if(btn) btn.disabled = true;
+}
+
+async function readImportFile(file){
+  const body = document.getElementById('importBody');
+  try{
+    const text = await file.text();
+    let doc;
+    try{ doc = JSON.parse(text); }
+    catch(e){ throw new Error('文件不是合法 JSON'); }
+
+    // Accept the export document, a bare array, or a single account object.
+    let rows;
+    if(Array.isArray(doc)) rows = doc;
+    else if(doc && Array.isArray(doc.accounts)) rows = doc.accounts;
+    else if(doc && (doc.accessToken || doc.auth)) rows = [doc];
+    else throw new Error('文件里没有找到账号（既没有 accounts 数组，也不是单个账号）');
+
+    if(!rows.length) throw new Error('账号列表是空的');
+    importRows = rows;
+
+    // Dry-run first so the user sees exactly what will happen.
+    const r = await postJSON('/accounts/import', {data: doc, dryRun: true});
+    renderImportPreview(file.name, r.result || {}, rows.length);
+  }catch(e){
+    importRows = null;
+    const btn = document.getElementById('btnImportCommit');
+    if(btn) btn.disabled = true;
+    if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">读取失败: ' + esc(e.message) + '</p>';
+  }
+}
+
+function renderImportPreview(filename, res, total){
+  const body = document.getElementById('importBody');
+  const btn = document.getElementById('btnImportCommit');
+  const added = res.added || [], updated = res.updated || [];
+  const skipped = res.skipped || [], invalid = res.invalid || [];
+
+  const rowsHtml = list => list.map(x => {
+    const uid = (typeof x === 'string' ? x : x.uid) || '?';
+    const reason = (typeof x === 'object' && x.reason) ? ' — ' + esc(x.reason) : '';
+    return '<li><code>' + esc(String(uid).slice(0,8)) + '</code>' + reason + '</li>';
+  }).join('');
+
+  let html = '<p class="hint" style="margin-top:0">文件：<b>' + esc(filename) + '</b>'
+    + ' · 共 ' + total + ' 条</p>';
+  html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">'
+    + '<span>新增 <b style="color:var(--accent2)">' + added.length + '</b></span>'
+    + '<span>覆盖 <b>' + updated.length + '</b></span>'
+    + '<span>跳过 <b>' + skipped.length + '</b></span>'
+    + '<span>无效 <b style="color:var(--warn)">' + invalid.length + '</b></span>'
+    + '</div>';
+
+  if(added.length)   html += '<div style="margin-bottom:8px"><b>将新增</b><ul class="hint" style="margin:4px 0 0 18px;padding:0">' + rowsHtml(added) + '</ul></div>';
+  if(updated.length) html += '<div style="margin-bottom:8px"><b>将覆盖</b><ul class="hint" style="margin:4px 0 0 18px;padding:0">' + rowsHtml(updated) + '</ul></div>';
+  if(skipped.length) html += '<div style="margin-bottom:8px"><b>将跳过</b><ul class="hint" style="margin:4px 0 0 18px;padding:0">' + rowsHtml(skipped) + '</ul></div>';
+  if(invalid.length) html += '<div style="margin-bottom:8px"><b>无法解析</b><ul class="hint" style="margin:4px 0 0 18px;padding:0">' + rowsHtml(invalid) + '</ul></div>';
+
+  if(!added.length && !updated.length){
+    html += '<p class="hint" style="color:var(--warn)">没有可导入的账号。'
+      + (skipped.length ? '若要覆盖已存在的账号，请勾选下方「覆盖同 UID 账号」。' : '') + '</p>';
+  }
+  if(body) body.innerHTML = html;
+
+  const canCommit = (added.length + updated.length) > 0;
+  if(btn){
+    btn.disabled = !canCommit;
+    btn.textContent = '确认导入 ' + (added.length + updated.length) + ' 个';
+  }
+}
+
+async function commitImport(btn){
+  if(!importRows) return;
+  const ow = document.getElementById('importOverwrite');
+  const overwrite = !!(ow && ow.checked);
+  if(overwrite && !confirm('将覆盖同 UID 的现有账号（含其凭证），确定继续？')) return;
+
+  if(btn){ btn.disabled = true; btn.textContent = '导入中...'; }
+  try{
+    const r = await postJSON('/accounts/import', {data: importRows, overwrite: overwrite});
+    const res = r.result || {};
+    const n = (res.added || []).length + (res.updated || []).length;
+    toast('导入完成：新增 ' + (res.added || []).length
+          + '，覆盖 ' + (res.updated || []).length
+          + '，跳过 ' + (res.skipped || []).length
+          + '，无效 ' + (res.invalid || []).length);
+    if(n > 0){ closeImport(); await loadAccounts(); }
+    else { renderImportPreview('（已导入）', res, importRows.length); }
+  }catch(e){
+    toast('导入失败: ' + e.message, 'err');
+    if(btn){ btn.disabled = false; btn.textContent = '确认导入'; }
+  }
+}
+
+/* 桌面客户端账号：两步确认（先扫描展示弹窗，再逐条导入） */
+async function scanDesktop(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '扫描中...'; }
+  openDesktopScan();
+  try{
+    const acct = await getJSON('/accounts?realm=all').catch(() => ({accounts: []}));
+    window.SCAN_POOL = new Set((acct.accounts || []).map(a => a.uid));
+    const r = await postJSON('/accounts/import/desktop', {});
+    renderDesktopScan(r.detected || []);
+  }catch(e){
+    const body = document.getElementById('desktopScanBody');
+    if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">扫描失败: ' + esc(e.message) + '</p>';
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '扫描桌面客户端账号'; }
+  }
+}
+
+function openDesktopScan(){
+  const m = document.getElementById('desktopScanModal');
+  const body = document.getElementById('desktopScanBody');
+  if(body) body.innerHTML = '<p class="hint">正在检测本机桌面客户端账号…</p>';
+  if(m) m.classList.add('show');
+}
+
+function closeDesktopScan(){
+  const m = document.getElementById('desktopScanModal');
+  if(m) m.classList.remove('show');
+}
+
+async function refreshDesktopScan(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '扫描中...'; }
+  const body = document.getElementById('desktopScanBody');
+  if(body) body.innerHTML = '<p class="hint">正在检测本机桌面客户端账号…</p>';
+  try{
+    const r = await postJSON('/accounts/import/desktop', {});
+    renderDesktopScan(r.detected || []);
+  }catch(e){
+    if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">扫描失败: ' + esc(e.message) + '</p>';
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '重新扫描'; }
+  }
+}
+
+function renderDesktopScan(list){
+  const body = document.getElementById('desktopScanBody');
+  if(!body) return;
+  const valid = list.filter(d => d.valid);
+  const bad = list.filter(d => !d.valid);
+  // Use every account across both realms: the visible list is filtered by the
+  // current view, so an earlier import could otherwise look "not imported".
+  const already = window.SCAN_POOL && window.SCAN_POOL.size
+    ? window.SCAN_POOL
+    : new Set((window.ACCOUNTS || []).map(a => a.uid));
+
+  if(!list.length){
+    body.innerHTML = '<p class="hint">未在本机检测到桌面客户端登录凭证。<br>'
+      + '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。</p>';
+    return;
+  }
+
+  const section = (title, items, cls) => {
+    let html = '<div style="margin:14px 0 6px;font-size:12px;font-weight:600" class="' + cls + '">'
+      + title + ' <span style="color:var(--dim);font-weight:400">(' + items.length + ')</span></div>';
+    if(!items.length){
+      html += '<div class="hint" style="margin:4px 0 10px">未检测到该版本账号</div>';
+      return html;
+    }
+    html += '<table><thead><tr><th>账号</th><th>域名</th><th>有效期</th><th></th></tr></thead><tbody>';
+    items.forEach(d => {
+      const dup = already.has(d.uid);
+      // NOTE: never interpolate the path into an inline onclick - JSON.stringify
+      // emits double quotes, which would terminate the HTML attribute and make
+      // the button silently do nothing. Use a data attribute + delegation.
+      const act = dup
+        ? '<span class="badge off">已导入</span>'
+        : '<button class="primary mini btn-import-desktop"'
+          + ' data-path="' + esc(d.path) + '"'
+          + ' data-realm="' + esc(d.realm) + '">导入</button>';
+      html += '<tr>'
+        + '<td><b>' + esc(d.nickname || (d.uid||'').slice(0,8)) + '</b>'
+        + '<div class="mono" style="font-size:11px;color:var(--dim)">' + esc((d.uid||'').slice(0,8)) + ' · ' + esc(d.file) + '</div></td>'
+        + '<td class="mono" style="font-size:11px">' + esc(d.domain || '-') + '</td>'
+        + '<td>' + esc(d.expiresIn || '未知') + '</td>'
+        + '<td style="text-align:right">' + act + '</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+  };
+
+  let html = section('国际版 (Global) · www.workbuddy.ai',
+                     valid.filter(d => d.realm !== 'cn'), '');
+  html += section('国内版 (China) · copilot.tencent.com',
+                  valid.filter(d => d.realm === 'cn'), '');
+
+  if(bad.length){
+    html += '<div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--warn)">无法读取的凭证</div>';
+    html += '<table><tbody>';
+    bad.forEach(d => {
+      html += '<tr><td class="mono" style="font-size:11px">' + esc(d.file) + '</td>'
+        + '<td style="color:var(--warn);font-size:12px;text-align:right">' + esc(d.error || '未知原因') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+  body.innerHTML = html;
+  // Wire the import buttons through event delegation (see renderDesktopScan).
+  body.querySelectorAll('.btn-import-desktop').forEach(btn => {
+    btn.addEventListener('click', () => {
+      doImportDesktop(btn, btn.getAttribute('data-path'), btn.getAttribute('data-realm'));
+    });
+  });
+}
+
+async function doImportDesktop(btn, path, realm){
+  btn.disabled = true;
+  btn.textContent = '导入中...';
+    try{
+    const r = await postJSON('/accounts/import/desktop', {path: path, realm: realm});
+    const a = (r.imported || [])[0] || {};
+    toast('已导入 ' + (a.nickname || (a.uid||'').slice(0,8)) + ' 到 ' + (a.realm === 'cn' ? '国内版' : '国际版'));
+    if(a.uid && window.SCAN_POOL) window.SCAN_POOL.add(a.uid);
+    await loadAccounts();
+    await refresh();
+    try {
+      const s = await postJSON('/accounts/import/desktop', {});
+      if(s.pool_uids) window.SCAN_POOL = new Set(s.pool_uids);
+      renderDesktopScan(s.detected || []);
+    } catch(e2) { /* keep the refreshed toasts; list will refresh on next scan */ }
+    // The scan list is filtered by the current view; tell the user where the
+    // account actually landed so this never looks like a no-op.
+    if(a.realm && a.realm !== window.VIEW_REALM){
+      toast('该账号属于' + (a.realm === 'cn' ? '国内版' : '国际版')
+            + '列表，点击上方选项卡即可查看', 'err');
+    }
+  }catch(e){
+    toast('导入失败: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '导入';
+  }
+}
+
+/* ------------------------------- dashboard ------------------------------ */
+let REFRESH_BUSY = false;
+async function refresh(){
+  // 5 秒轮询：上一轮尚未返回就跳过本轮，避免请求堆积把服务端拖慢
+  if(REFRESH_BUSY) return;
+  REFRESH_BUSY = true;
+  try { await refreshInner(); }
+  finally { REFRESH_BUSY = false; }
+}
+async function refreshInner(){
+  let usage, recent, perf;
+  try{
+    [usage, recent, perf] = await Promise.all([
+      getJSON('/usage?realm=' + encodeURIComponent(window.VIEW_REALM)),
+      getJSON('/usage/recent?limit=' + RECENT_LIMIT + '&page=' + RECENT_PAGE + '&realm=' + encodeURIComponent(window.VIEW_REALM)),
+      getJSON('/usage/perf?realm=' + encodeURIComponent(window.VIEW_REALM)),
+    ]);
+    document.getElementById('statusDot').className = 'dot';
+  }catch(e){
+    document.getElementById('statusDot').className = 'dot err';
+    if(String(e.message) !== 'unauthorized'){
+      document.getElementById('meta').innerHTML = '<b>无法连接反代</b>';
+    }
+    return;
+  }
+
+  const t = usage;
+  const metaEl = document.getElementById('meta');
+  if(metaEl) metaEl.innerHTML = '';
+  document.getElementById('logfile').textContent = t.log_file || '';
+  const rEl = document.getElementById('realm'); if(rEl) rEl.textContent = t.realm ? ' · ' + t.realm : '';
+
+  // Sum credits across accounts
+  let totRemain = 0, totSize = 0, hasCreds = false;
+  window.ACCOUNTS.forEach(a => {
+    if(a.credits){
+      totRemain += (a.credits.remain || 0);
+      totSize += (a.credits.size || 0);
+      hasCreds = true;
+    }
+  });
+
+  // An account parked by the low-credit guard is enabled but not serving, so
+  // the pool card must not count it as "正常".
+  const accts = window.ACCOUNTS || [];
+  const activeAccts = accts.filter(a => a.enabled && !a.reserveBlocked).length;
+  const totalAccts = accts.length;
+  const parkedAccts = accts.filter(a => a.enabled && a.reserveBlocked).length;
+  const disabledAccts = accts.filter(a => !a.enabled).length;
+  const poolNotes = [];
+  if(parkedAccts) poolNotes.push(parkedAccts + ' 个保留积分');
+  if(disabledAccts) poolNotes.push(disabledAccts + ' 个停用');
+  const poolSub = poolNotes.length ? poolNotes.join(' · ') : '全部启用 · 状态健康';
+  const pctRemain = totSize > 0 ? ((totRemain / totSize) * 100).toFixed(1) + '%' : '';
+  const subCredit = totSize > 0 ? ('总积分 ' + fmt(totSize) + ' · 剩余 ' + pctRemain) : '当前账号正常';
+  const succStr = perf.success_rate_pct != null ? pct(perf.success_rate_pct) : '100.0%';
+  const errSub = perf.errors ? (perf.errors + ' 次异常拦截') : '服务运行平稳';
+
+  document.getElementById('cards').innerHTML =
+    card('可用账号池', activeAccts + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">/ ' + totalAccts + ' 正常</span>', poolSub, 'accent') +
+    card('积分余额', hasCreds ? (fmt(totRemain) + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">积分</span>') : '正常可用', subCredit, 'accent2') +
+    card('网关调用量', fmt(t.requests) + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">次</span>', '本出口累计消耗 ' + fmt(t.total_tokens) + ' Token · ' + Number(t.credit || 0).toFixed(2) + ' 积分', '') +
+    card('请求成功率', succStr, errSub, perf.errors ? 'warn' : 'accent2');
+
+  const total = recent.total || 0;
+  RECENT_PAGE = recent.page || 1;
+  RECENT_TOTAL_PAGES = recent.total_pages || Math.max(1, Math.ceil(total / RECENT_LIMIT));
+
+  const pageInfo = document.getElementById('recentPageInfo');
+  if(pageInfo){
+    pageInfo.textContent = '第 ' + RECENT_PAGE + ' / ' + RECENT_TOTAL_PAGES + ' 页 · 共 ' + fmt(total) + ' 条记录';
+  }
+  const btnPrev = document.getElementById('btnRecentPrev');
+  if(btnPrev) btnPrev.disabled = (RECENT_PAGE <= 1);
+  const btnNext = document.getElementById('btnRecentNext');
+  if(btnNext) btnNext.disabled = (RECENT_PAGE >= RECENT_TOTAL_PAGES);
+  const btnBox = document.getElementById('recentPageButtons');
+  if(btnBox){
+    const pages = generatePageList(RECENT_PAGE, RECENT_TOTAL_PAGES);
+    btnBox.innerHTML = pages.map(p => {
+      if(p === '...'){
+        return '<span style="color:var(--dim);padding:0 3px">…</span>';
+      }
+      const active = (p === RECENT_PAGE);
+      return '<button class="range-btn' + (active ? ' active' : '') + '" style="min-width:26px;padding:3px 6px;font-size:11px" onclick="gotoRecentPage(' + p + ')">' + p + '</button>';
+    }).join('');
+  }
+
+  const rows = recent.rows || [];
+  // Terminal state of a request. Rows written before the outcome field only
+  // carry error/status, so fall back to that; a client cancellation is shown
+  // apart from a real failure because the gateway did nothing wrong.
+  const outcomeBadge = r => {
+    const o = r.outcome || (r.error ? 'failed' : 'completed');
+    if(o === 'completed') return '<span class="badge ok">完成</span>';
+    if(o === 'client_aborted') return '<span class="badge off">客户端取消</span>';
+    if(o === 'upstream_aborted') return '<span class="badge warn">上游中断</span>';
+    return '<span class="badge bad">失败</span>';
+  };
+  const countEl = document.getElementById('recentCount');
+  if(countEl) countEl.textContent = '(第 ' + RECENT_PAGE + ' 页 / 共 ' + fmt(total) + ' 条)';
+  // 账号列显示昵称：uid -> 昵称取自 /usage 的 accounts_map（当前账号池）。
+  // 已删除/不存在的账号回退到 uid 前 8 位，避免留空。
+  const acctName = (uid) => {
+    if(!uid) return '—';
+    const m = (t.accounts_map && t.accounts_map[uid]);
+    return (m && m.nickname) ? m.nickname : String(uid).slice(0,8);
+  };
+  document.getElementById('recent').innerHTML = rows.length ?
+    '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th></tr></thead><tbody>'
+    + rows.map(r => '<tr>'
+        + '<td class="mono" data-label="时间">' + esc((r.iso||'').replace('T',' ').slice(5)) + '</td>'
+        + '<td class="mono" data-label="模型">' + esc(r.model) + '</td>'
+        + '<td class="mono" style="font-size:11px;color:var(--dim)" data-label="账号" title="' + esc(r.account||'') + '">' + esc(acctName(r.account)) + '</td>'
+        + '<td data-label="模式"><span class="badge ' + (r.stream?'s':'') + '">' + (r.stream?'流式':'非流式') + '</span></td>'
+        + '<td data-label="结果">' + outcomeBadge(r) + '</td>'
+        + '<td data-label="耗时">' + (r.elapsed_ms!=null ? fmt(r.elapsed_ms)+' ms' : '—') + '</td>'
+        + '<td data-label="首字">' + (r.ttft_ms!=null ? fmt(r.ttft_ms)+' ms' : '—') + '</td>'
+        + '<td data-label="速度">' + (r.tokens_per_sec ? r.tokens_per_sec.toFixed(1) : '—') + '</td>'
+        + '<td data-label="输入">' + fmt(r.prompt_tokens) + '</td>'
+        + '<td data-label="输出">' + fmt(r.completion_tokens) + '</td>'
+        + '<td style="color:var(--think)" data-label="思考">' + fmt(r.reasoning_tokens) + '</td>'
+        + '<td data-label="缓存">' + (r.cache_hit_pct!=null ? r.cache_hit_pct+'%' : '—') + '</td>'
+        + '<td data-label="总 token"><b>' + fmt(r.total_tokens) + '</b></td>'
+        + '<td data-label="积分" style="color:var(--accent2)">' + (r.credit != null ? Number(r.credit).toFixed(2) : '—') + '</td>'
+      + '</tr>').join('') + '</tbody></table>'
+    : '<div class="empty">还没有请求记录</div>';
+}
+
+(async function initDashboard(){
+  await bootPanel();
+})();
+
+let RECENT_LIMIT = parseInt(localStorage.getItem('WB_RECENT_LIMIT') || '20', 10);
+if(![10, 20, 50, 100].includes(RECENT_LIMIT)) RECENT_LIMIT = 20;
+let RECENT_PAGE = 1;
+let RECENT_TOTAL_PAGES = 1;
+
+function updateRecentLimitButtons(){
+  [10, 20, 50, 100].forEach(n => {
+    const btn = document.getElementById('btnRecentLimit' + n);
+    if(btn) btn.classList.toggle('active', RECENT_LIMIT === n);
+  });
+}
+
+function setRecentLimit(n){
+  RECENT_LIMIT = n;
+  RECENT_PAGE = 1;
+  try { localStorage.setItem('WB_RECENT_LIMIT', String(n)); } catch(e){}
+  updateRecentLimitButtons();
+  refresh();
+}
+
+async function changeRecentPage(delta){
+  const next = RECENT_PAGE + delta;
+  if(next < 1 || next > RECENT_TOTAL_PAGES) return;
+  RECENT_PAGE = next;
+  await refresh();
+}
+
+async function gotoRecentPage(p){
+  if(p < 1 || p > RECENT_TOTAL_PAGES || p === RECENT_PAGE) return;
+  RECENT_PAGE = p;
+  await refresh();
+}
+
+function generatePageList(current, total){
+  if(total <= 7){
+    return Array.from({length: total}, (_, i) => i + 1);
+  }
+  const pages = [1];
+  let start = Math.max(2, current - 2);
+  let end = Math.min(total - 1, current + 2);
+  if(current <= 4){
+    end = 5;
+  }
+  if(current >= total - 3){
+    start = total - 4;
+  }
+  if(start > 2) pages.push('...');
+  for(let i = start; i <= end; i++){
+    pages.push(i);
+  }
+  if(end < total - 1) pages.push('...');
+  pages.push(total);
+  return pages;
+}
+
+// Tab ids in nav order. One list so the restore path and the nav cannot
+// drift apart.
+const MAIN_TABS = ['gateway', 'analytics', 'logs', 'settings'];
+const MAIN_TAB_STORE = 'wb-proxy-main-tab';
+let currentMainTab = 'gateway';
+let analyticsRange = 'today';
+let cachedAnalyticsData = null;
+let cachedMatrixData = null;
+let matrixAcctFilter = '';
+let matrixModelFilter = '';
+// Model allowlist for the combined matrix; filled by loadAnalyticsMatrix().
+let MATRIX_MODELS = new Set();
+
+
+/* ---- panel password gate ---- */
+function isAuthError(err){
+  // Every 401/403 from the JSON helpers carries this message; the gate is
+  // the single place that explains it, so callers stay quiet instead of
+  // stacking an identical toast on top of it.
+  return !!err && String(err.message) === 'unauthorized';
+}
+
+function panelNeedsLogin(){
+  const gate = document.getElementById('panelGate');
+  if(gate) gate.style.display = 'flex';
+  const input = document.getElementById('panelPwdInput');
+  if(input){ input.focus(); }
+}
+
+function panelSessionLost(){
+  // The session this tab holds is no longer valid - the gateway restarted,
+  // or the token expired. Drop it and stop every poller: leaving them
+  // running means each tick fails, re-opens the gate and logs another 401
+  // server-side, which is how a stale tab ends up filling the log.
+  PANEL_READY = false;
+  PANEL_TIMERS.forEach(t => clearInterval(t));
+  PANEL_TIMERS = [];
+  if(typeof stopLogPolling === 'function') stopLogPolling();
+  PANEL_TOKEN = '';
+  try { sessionStorage.removeItem(PANEL_STORE); } catch(e) {}
+  const msg = document.getElementById('panelLoginMsg');
+  if(msg) msg.textContent = '会话已失效，请重新输入密码';
+  panelNeedsLogin();
+}
+
+function panelHideGate(){
+  const gate = document.getElementById('panelGate');
+  if(gate) gate.style.display = 'none';
+}
+
+async function submitPanelLogin(){
+  const input = document.getElementById('panelPwdInput');
+  const msg = document.getElementById('panelLoginMsg');
+  const password = (input && input.value) || '';
+  if(!password){ if(msg) msg.textContent = '请输入面板密码'; return; }
+  if(msg) msg.textContent = '';
+  try {
+    const r = await fetch('/panel/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: password})
+    });
+    const data = await r.json().catch(() => ({}));
+    if(!r.ok){
+      if(msg) msg.textContent = (data.error && data.error.message) || '密码错误';
+      return;
+    }
+    PANEL_TOKEN = data.token || '';
+    try { sessionStorage.setItem(PANEL_STORE, PANEL_TOKEN); } catch(e) {}
+    if(input) input.value = '';
+    panelHideGate();
+    toast('已进入面板', 'ok');
+    if(data.using_default_password){
+      toast('当前是默认密码 admin，建议到「设置」里修改', 'warn');
+    }
+    await startDashboard();
+  } catch(e) {
+    if(msg) msg.textContent = '登录失败: ' + e.message;
+  }
+}
+
+async function panelLogout(){
+  try { await postJSON('/panel/logout', {}); } catch(e) {}
+  PANEL_READY = false;
+  PANEL_TIMERS.forEach(t => clearInterval(t));
+  PANEL_TIMERS = [];
+  PANEL_TOKEN = '';
+  try { sessionStorage.removeItem(PANEL_STORE); } catch(e) {}
+  location.reload();
+}
+
+async function bootPanel(){
+  try {
+    const r = await fetch('/panel/status', {cache: 'no-store', headers: authHeaders()});
+    PANEL_STATUS = await r.json().catch(() => ({}));
+  } catch(e) { PANEL_STATUS = {}; }
+  const hint = document.getElementById('panelDefaultHint');
+  if(hint && PANEL_STATUS.panel_password_is_default) hint.style.display = 'block';
+  if(PANEL_STATUS.authenticated){
+    panelHideGate();
+    await startDashboard();
+  } else {
+    const pwdFromUrl = new URLSearchParams(window.location.search).get('pwd');
+    if(pwdFromUrl){
+      const input = document.getElementById('panelPwdInput');
+      if(input) input.value = pwdFromUrl;
+      await submitPanelLogin();
+    } else {
+      panelNeedsLogin();
+    }
+  }
+}
+
+let PANEL_READY = false;
+let PANEL_TIMERS = [];
+
+async function startDashboard(){
+  if(PANEL_READY) return;
+  PANEL_READY = true;
+  await loadSettings();
+  await initRealm();
+  await loadAccounts();
+  await loadModels();
+  await loadGrowthTasks();
+  await loadSchedulerStatus();
+  await refresh();
+  updateRecentLimitButtons();
+  // The head script already resolved this before first paint; re-apply it
+  // here so the data loaders for the active page actually run.
+  switchMainTab(MAIN_TABS.includes(window.__MAIN_TAB__) ? window.__MAIN_TAB__ : 'gateway');
+  // Polling only starts after the panel is unlocked, so a locked browser
+  // never hammers the server with 401s.
+  PANEL_TIMERS.forEach(t => clearInterval(t));
+  PANEL_TIMERS = [
+    setInterval(() => {
+      if(!PANEL_READY) return;
+      if(currentMainTab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
+    }, 5000),
+    setInterval(refresh, 5000),
+    setInterval(loadSchedulerStatus, 30000),
+    setInterval(loadAccounts, 15000),
+  ];
+}
+
+async function loadSettings(showToast){
+  try {
+    const data = await getJSON('/settings');
+    const pwdState = document.getElementById('setPwdState');
+    if(pwdState){
+      pwdState.textContent = data.panel_password_is_default ? '(当前为默认密码)' : '(已自定义)';
+      pwdState.style.color = data.panel_password_is_default ? 'var(--warn)' : 'var(--accent2)';
+    }
+    const keyState = document.getElementById('setKeyState');
+    if(keyState){
+      const count = (data.api_keys || []).filter(k => k.enabled).length;
+      keyState.textContent = count ? ('(' + count + ' 个生效)') : '(当前不校验)';
+      keyState.style.color = count ? 'var(--accent2)' : 'var(--dim)';
+    }
+    const reserveValue = Number(data.reserve_credits || 0);
+    const reserveInput = document.getElementById('setReserveCredits');
+    if(reserveInput) reserveInput.value = String(reserveValue);
+    const reserveState = document.getElementById('setReserveState');
+    if(reserveState){
+      reserveState.textContent = reserveValue > 0 ? ('(低于 ' + reserveValue + ' 暂停接单)') : '(未启用)';
+      reserveState.style.color = reserveValue > 0 ? 'var(--accent2)' : 'var(--dim)';
+    }
+    // Rebuild the editable rows, keeping stored values so an untouched field
+    // is not accidentally blanked.
+    API_KEY_ROWS = (data.api_keys || []).map(k => ({
+      id: k.id || '',
+      name: k.name || '',
+      key: '',
+      // The server keeps the stored value when a row comes back blank, so
+      // leaving the field untouched will not wipe an existing key.
+      stored_key: '',
+      masked: k.masked || '',
+      realm: k.realm || '',
+      enabled: k.enabled !== false,
+      created_at: k.created_at || '',
+      _editing: false,
+    }));
+    window.API_KEY_ROWS = API_KEY_ROWS;
+    renderKeyRows();
+    updateUI();
+    const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value || '-'; };
+    set('setVersion', data.version);
+    set('setAccountsDir', data.accounts_dir);
+    set('setUsageDir', data.usage_dir);
+    set('setFile', data.settings_file);
+    set('setSettingsFile', data.settings_file);
+    if(showToast) toast('设置已刷新', 'ok');
+  } catch(e) {
+    if(showToast) toast('读取设置失败: ' + e.message, 'bad');
+  }
+}
+
+async function savePanelPassword(btn){
+  const cur = (document.getElementById('setPwdCurrent') || {}).value || '';
+  const nw = (document.getElementById('setPwdNew') || {}).value || '';
+  if(!cur || !nw){ toast('请填写当前密码和新密码', 'warn'); return; }
+  btn.disabled = true;
+  try {
+    const data = await postJSON('/panel/password', {current: cur, new: nw});
+    if(data.token){
+      PANEL_TOKEN = data.token;
+      try { sessionStorage.setItem(PANEL_STORE, PANEL_TOKEN); } catch(e) {}
+    }
+    document.getElementById('setPwdCurrent').value = '';
+    document.getElementById('setPwdNew').value = '';
+    toast('面板密码已更新', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('修改失败: ' + e.message, 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function saveReserveCredits(btn){
+  const el = document.getElementById('setReserveCredits');
+  const value = Math.floor(Number((el || {}).value || 0));
+  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {reserve_credits: value});
+    toast(value > 0 ? ('已启用：余额低于 ' + value + ' 的账号暂停接单') : '已关闭保留积分', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+/* ---- API key list: several keys, each bound to an upstream exit ---- */
+let API_KEY_ROWS = [];
+
+function randomKeyValue(){
+  const bytes = new Uint8Array(18);
+  if(window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+  const raw = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  // crypto.getRandomValues is present in every supported browser; the
+  // timestamp fallback only exists so the field is never left empty.
+  return raw || ('wb-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+}
+
+const REALM_CHOICES = [
+  ['', '跟随面板切换'],
+  ['intl', '固定国际版出口'],
+  ['cn', '固定国内版出口'],
+];
+
+function renderKeyRows(){
+  const box = document.getElementById('keyList');
+  if(!box) return;
+  if(!API_KEY_ROWS.length){
+    box.innerHTML = '<div class="empty" style="padding:24px 0">还没有配置 API Key，点击右上角「+ 添加 API Key」创建。</div>';
+    return;
+  }
+  box.innerHTML = API_KEY_ROWS.map((row, i) => {
+    if(row._editing){
+      const options = REALM_CHOICES.map(([val, lbl]) =>
+        '<option value="' + val + '"' + ((row.realm || '') === val ? ' selected' : '') + '>' + lbl + '</option>'
+      ).join('');
+      return '<div class="key-card" style="border-color:var(--accent);background:#ffffff;box-shadow:0 0 0 1px var(--accent), var(--shadow-md)">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+        +   '<div style="font-size:14px;font-weight:700;color:var(--fg)">' + (row.id ? '编辑 API Key' : '新建 API Key') + '</div>'
+        +   '<span class="badge s mini">设置出口</span>'
+        + '</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px">'
+        +   '<div>'
+        +     '<div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:500">备注名称</div>'
+        +     '<input type="text" id="editKeyName_' + i + '" value="' + esc(row.name || '') + '" placeholder="如: Cursor / DSH / 本地测试" '
+        +       'style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;color:var(--fg)">'
+        +   '</div>'
+        +   '<div>'
+        +     '<div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:500">出口绑定</div>'
+        +     '<select id="editKeyRealm_' + i + '" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;color:var(--fg)">'
+        +       options
+        +     '</select>'
+        +   '</div>'
+        +   '<div style="grid-column:1 / -1">'
+        +     '<div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:500">API Key 内容 ' + (row.masked ? '<span style="color:var(--dim-light)">(已保存: ' + esc(row.masked) + '，留空表示不改)</span>' : '') + '</div>'
+        +     '<div style="display:flex;gap:8px">'
+        +       '<input type="text" id="editKeyValue_' + i + '" value="' + esc(row.key || '') + '" placeholder="' + (row.masked ? '留空表示保持原 Key 不变' : '输入自定义密钥，或点击右侧生成') + '" '
+        +         'style="flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;color:var(--fg)">'
+        +       '<button class="sec mini" style="white-space:nowrap;border-radius:8px;padding:7px 14px" onclick="generateKeyForEdit(' + i + ')">随机生成</button>'
+        +     '</div>'
+        +   '</div>'
+        + '</div>'
+        + '<div style="display:flex;gap:8px;justify-content:flex-end">'
+        +   '<button class="sec mini" style="border-radius:8px;padding:6px 16px" onclick="cancelEditKey(' + i + ')">取消</button>'
+        +   '<button class="mini" style="border-radius:8px;padding:6px 18px" onclick="saveSingleKey(' + i + ', this)">保存</button>'
+        + '</div>'
+        + '</div>';
+    }
+
+    const statusBadge = row.enabled
+      ? '<span class="badge ok" style="font-size:11px;font-weight:600;padding:2px 10px">已启用</span>'
+      : '<span class="badge off" style="font-size:11px;font-weight:600;padding:2px 10px">已禁用</span>';
+
+    const realmBadge = (row.realm === 'intl')
+      ? '<span class="realm-badge-intl" style="font-size:11px">固定国际版出口</span>'
+      : (row.realm === 'cn')
+      ? '<span class="realm-badge-cn" style="font-size:11px">固定国内版出口</span>'
+      : '<span class="badge s" style="font-size:11px">跟随面板切换</span>';
+
+    const displayKey = row.masked || (row.key ? (row.key.slice(0, 4) + '******' + row.key.slice(-4)) : '未设置');
+    const createdStr = row.created_at ? ('创建时间 ' + esc(row.created_at)) : '';
+
+    return '<div class="key-card' + (row.enabled ? '' : ' disabled') + '">'
+      + '<div class="key-card-main">'
+      +   '<div>'
+      +     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+      +       '<span style="font-size:15px;font-weight:700;color:var(--fg)">' + esc(row.name || '未命名') + '</span>'
+      +       statusBadge
+      +       realmBadge
+      +     '</div>'
+      +     '<div style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
+      +       '<span>Key: <span class="mono" style="color:var(--fg);font-weight:500">' + esc(displayKey) + '</span></span>'
+      +       (createdStr ? ('<span>' + createdStr + '</span>') : '')
+      +     '</div>'
+      +   '</div>'
+      +   '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+      +     '<button class="key-action-btn" id="copyBtn' + i + '" onclick="copyKeyRow(' + i + ')">复制</button>'
+      +     '<button class="key-action-btn" onclick="openEditKey(' + i + ')">编辑</button>'
+      +     '<button class="key-action-btn" onclick="toggleKeyRow(' + i + ')">' + (row.enabled ? '禁用' : '启用') + '</button>'
+      +     '<button class="key-action-btn danger" onclick="removeKeyRow(' + i + ')">删除</button>'
+      +   '</div>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+function openEditKey(index){
+  if(!API_KEY_ROWS[index]) return;
+  API_KEY_ROWS[index]._editing = true;
+  renderKeyRows();
+}
+
+function cancelEditKey(index){
+  if(!API_KEY_ROWS[index]) return;
+  if(!API_KEY_ROWS[index].id && !API_KEY_ROWS[index].masked){
+    API_KEY_ROWS.splice(index, 1);
+  } else {
+    API_KEY_ROWS[index]._editing = false;
+  }
+  renderKeyRows();
+}
+
+function generateKeyForEdit(index){
+  const el = document.getElementById('editKeyValue_' + index);
+  if(el){
+    el.value = randomKeyValue();
+  }
+}
+
+async function saveSingleKey(index, btn){
+  const row = API_KEY_ROWS[index];
+  if(!row) return;
+  const nameInput = document.getElementById('editKeyName_' + index);
+  const realmSelect = document.getElementById('editKeyRealm_' + index);
+  const keyInput = document.getElementById('editKeyValue_' + index);
+
+  const name = nameInput ? nameInput.value.trim() : (row.name || '');
+  const realm = realmSelect ? realmSelect.value : (row.realm || '');
+  const keyVal = keyInput ? keyInput.value.trim() : (row.key || '');
+
+  if(!keyVal && !row.masked){
+    toast('API Key 不能为空', 'warn');
+    return;
+  }
+
+  row.name = name || '未命名';
+  row.realm = realm;
+  if(keyVal) row.key = keyVal;
+  row._editing = false;
+
+  if(btn) btn.disabled = true;
+  try {
+    await saveApiKeys();
+    toast('API Key [' + row.name + '] 已保存', 'ok');
+  } catch(e){
+    toast('保存失败: ' + e.message, 'bad');
+  }
+}
+
+async function toggleKeyRow(index){
+  const row = API_KEY_ROWS[index];
+  if(!row) return;
+  row.enabled = !row.enabled;
+  try {
+    await saveApiKeys();
+    toast(row.enabled ? 'Key [' + row.name + '] 已启用' : 'Key [' + row.name + '] 已禁用', 'ok');
+  } catch(e){
+    toast('操作失败: ' + e.message, 'bad');
+  }
+}
+
+async function removeKeyRow(index){
+  const row = API_KEY_ROWS[index];
+  if(!row) return;
+  if(!confirm('确定删除 API Key [' + (row.name || '未命名') + '] 吗？此操作不可撤销。')) return;
+  API_KEY_ROWS.splice(index, 1);
+  try {
+    await saveApiKeys();
+    toast('已删除 API Key', 'ok');
+  } catch(e){
+    toast('删除失败: ' + e.message, 'bad');
+  }
+}
+
+function addApiKeyRow(){
+  API_KEY_ROWS.push({
+    id: '',
+    name: '',
+    key: randomKeyValue(),
+    realm: '',
+    enabled: true,
+    masked: '',
+    _editing: true
+  });
+  renderKeyRows();
+  setTimeout(() => {
+    const el = document.getElementById('editKeyName_' + (API_KEY_ROWS.length - 1));
+    if(el) el.focus();
+  }, 50);
+}
+/* Copy the key in a row, fetching the stored value when the field is blank
+   (the panel only ever displays a masked key). */
+async function copyKeyRow(index){
+  const row = API_KEY_ROWS[index];
+  if(!row) return;
+  const btn = document.getElementById('copyBtn' + index);
+  let value = (row.key || '').trim();
+  try {
+    if(!value && row.id){
+      const data = await getJSON('/settings/reveal?id=' + encodeURIComponent(row.id));
+      value = data.key || '';
+    }
+    if(!value){
+      toast('这一行还没有 Key，点「随机生成」或直接填写', 'warn');
+      return;
+    }
+    await writeClipboard(value);
+    if(btn){
+      const old = btn.textContent;
+      btn.textContent = '已复制';
+      setTimeout(() => { btn.textContent = old; }, 1600);
+    }
+    toast('已复制到剪贴板', 'ok');
+  } catch(e) {
+    toast('复制失败: ' + e.message, 'bad');
+  }
+}
+
+async function writeClipboard(text){
+  // navigator.clipboard needs a secure context; plain http on a LAN address
+  // does not qualify, so fall back to a temporary textarea.
+  if(navigator.clipboard && window.isSecureContext){
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+  document.body.appendChild(area);
+  area.select();
+  area.setSelectionRange(0, area.value.length);
+  const ok = document.execCommand('copy');
+  document.body.removeChild(area);
+  if(!ok) throw new Error('浏览器拒绝了复制操作');
+}
+
+async function saveApiKeys(btn){
+  const payload = API_KEY_ROWS.map(row => ({
+    id: row.id || '',
+    name: row.name || '',
+    realm: row.realm || '',
+    enabled: row.enabled !== false,
+    // Blank means "keep the stored key", which the server honours per row.
+    key: (row.key || '').trim(),
+  }));
+  const newRow = API_KEY_ROWS.find(row => !row.masked && !(row.key || '').trim());
+  if(newRow){
+    toast('新增的行还没有填写 Key', 'warn');
+    return;
+  }
+  // Several callers save without going through a button (saveSingleKey,
+  // toggleKeyRow, removeKeyRow), so a missing button must not abort the save.
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {api_keys: payload});
+    toast('已保存 ' + payload.length + ' 个 Key', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+let PROXY_SLOTS = [];
+let SLOT_DISCOVER = [];
+
+function slotSelectHtml(a){
+  const current = a.proxySlot || '';
+  // A legacy per-account proxy URL still routes traffic while no slot is
+  // bound. Surface it instead of pretending the account is direct.
+  const legacy = (!current && a.proxy) ? String(a.proxy) : '';
+  const legacyLabel = legacy.length > 28 ? legacy.slice(0, 25) + '...' : legacy;
+  const opts = [];
+  if(legacy){
+    opts.push('<option value="__legacy__" selected>旧代理：' + esc(legacyLabel) + '</option>');
+    opts.push('<option value="">直连（清除旧代理）</option>');
+  } else {
+    opts.push('<option value=""' + (current ? '' : ' selected') + '>直连</option>');
+  }
+  opts.push.apply(opts, PROXY_SLOTS.map(s =>
+    '<option value="' + esc(s.id) + '"' + (s.id === current ? ' selected' : '') + '>'
+    + esc(s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
+  const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
+  return '<select class="slot-select" onchange="setAccountSlot(&quot;' + uidAttr + '&quot;, this.value, this)">'
+    + opts.join('') + '</select>';
+}
+
+async function setAccountSlot(uid, slotId, el){
+  if(slotId === '__legacy__') return;
+  if(el) el.disabled = true;
+  try{
+    await postJSON('/accounts/set', {uid: uid, proxySlot: slotId});
+    toast('出口已更新', 'ok');
+    await loadAccounts();
+    await loadProxySlots();
+  }catch(e){
+    toast('出口更新失败: ' + e.message, 'bad');
+  }finally{
+    if(el) el.disabled = false;
+  }
+}
+
+async function loadProxySlots(){
+  try{
+    const r = await getJSON('/proxy/slots');
+    PROXY_SLOTS = r.slots || [];
+    renderProxySlots();
+  }catch(e){
+    // Panel not logged in yet; actions on the settings page surface errors.
+  }
+}
+
+function renderProxySlots(){
+  const box = document.getElementById('slotList');
+  if(!box) return;
+  const stateEl = document.getElementById('slotState');
+  if(stateEl) stateEl.textContent = PROXY_SLOTS.length ? ('（' + PROXY_SLOTS.length + ' 个）') : '';
+  if(!PROXY_SLOTS.length){
+    box.innerHTML = '<div class="hint" style="color:var(--dim)">还没有代理槽。点击「自动发现 mihomo 端口」或「+ 添加槽位」。</div>';
+    return;
+  }
+  box.innerHTML = '<div class="table-wrap"><table class="data-cards"><thead><tr>'
+    + '<th style="width:150px">名称</th>'
+    + '<th>代理地址</th>'
+    + '<th style="width:90px;text-align:center">启用</th>'
+    + '<th style="width:90px;text-align:center">绑定账号</th>'
+    + '<th style="width:190px;text-align:center">操作</th>'
+    + '</tr></thead><tbody>'
+    + PROXY_SLOTS.map((s, i) =>
+        '<tr>'
+        + '<td data-label="名称"><input value="' + esc(s.name || '') + '" oninput="PROXY_SLOTS[' + i + '].name=this.value" class="slot-input"></td>'
+        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '" oninput="PROXY_SLOTS[' + i + '].url=this.value" class="slot-input mono"></td>'
+        + '<td style="text-align:center" data-label="启用"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
+        +   ' onchange="PROXY_SLOTS[' + i + '].enabled=this.checked"></td>'
+        + '<td style="text-align:center" data-label="绑定账号">' + (s.bound || 0) + '</td>'
+        + '<td style="text-align:center;white-space:nowrap" data-label="">'
+        +   '<button class="sec mini" onclick="testProxySlot(' + i + ', this)">测试</button> '
+        +   '<button class="danger mini" onclick="removeProxySlot(' + i + ')">删除</button>'
+        + '</td></tr>'
+      ).join('')
+    + '</tbody></table></div>'
+    + '<div class="legend"><span>「绑定账号」只统计已启用账号；停用账号会自动释放槽位，重新启用后需重新绑定。在网关页账号表的「出口」下拉中调整绑定。</span></div>';
+}
+
+function addProxySlotRow(){
+  PROXY_SLOTS.push({id: '', name: '槽 ' + (PROXY_SLOTS.length + 1), url: '', enabled: true, bound: 0});
+  renderProxySlots();
+}
+
+function removeProxySlot(index){
+  const s = PROXY_SLOTS[index];
+  if(!s) return;
+  if((s.bound || 0) > 0 && !confirm('该槽位被 ' + s.bound + ' 个账号绑定，删除后它们将回退直连。继续？')) return;
+  PROXY_SLOTS.splice(index, 1);
+  renderProxySlots();
+}
+
+async function saveProxySlots(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const payload = PROXY_SLOTS.map(s => ({id: s.id || '', name: s.name || '', url: (s.url || '').trim(), enabled: s.enabled !== false}));
+    const r = await postJSON('/proxy/slots/save', {slots: payload});
+    PROXY_SLOTS = r.slots || [];
+    renderProxySlots();
+    await loadAccounts();
+    toast('已保存 ' + PROXY_SLOTS.length + ' 个代理槽', 'ok');
+  }catch(e){
+    toast('保存失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function testProxySlot(index, btn){
+  const s = PROXY_SLOTS[index];
+  if(!s || !s.url){ toast('槽位还没有填写代理地址', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = '测试中...'; }
+  try{
+    let id = s.id;
+    if(!id){
+      const payload = PROXY_SLOTS.map(x => ({id: x.id || '', name: x.name || '', url: (x.url || '').trim(), enabled: x.enabled !== false}));
+      const r = await postJSON('/proxy/slots/save', {slots: payload});
+      PROXY_SLOTS = r.slots || [];
+      renderProxySlots();
+      id = (PROXY_SLOTS[index] || {}).id;
+    }
+    const r = await postJSON('/proxy/slots/test', {id: id});
+    if(r.ok) toast('出口 IP: ' + r.exit_ip + '（' + r.latency_ms + 'ms）', 'ok');
+    else toast('测试失败: ' + (r.error || 'unknown'), 'bad');
+  }catch(e){
+    toast('测试失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '测试'; }
+  }
+}
+
+async function discoverProxySlots(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '探测中...'; }
+  try{
+    const r = await postJSON('/proxy/discover', {});
+    SLOT_DISCOVER = r.candidates || [];
+    renderDiscover();
+    const ok = SLOT_DISCOVER.filter(c => c.reachable).length;
+    toast('发现 ' + ok + ' 个可用出口', ok ? 'ok' : 'warn');
+  }catch(e){
+    toast('自动发现失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '自动发现 mihomo 端口'; }
+  }
+}
+
+function renderDiscover(){
+  const box = document.getElementById('slotDiscover');
+  if(!box) return;
+  if(!SLOT_DISCOVER.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div style="margin-top:14px"><div style="font-size:12px;color:var(--dim);margin-bottom:8px">'
+    + '勾选要导入为槽位的出口：</div>'
+    + SLOT_DISCOVER.map((c, i) =>
+        '<label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px">'
+        + '<input type="checkbox" ' + (c.reachable ? 'checked' : 'disabled') + ' data-idx="' + i + '">'
+        + '<span class="mono">' + esc(c.url) + '</span>'
+        + '<span style="color:' + (c.reachable ? 'var(--accent2)' : 'var(--bad)') + '">'
+        + (c.reachable ? ('出口 ' + esc(c.exit_ip) + ' · ' + c.latency_ms + 'ms') : '不可达') + '</span>'
+        + '</label>').join('')
+    + '<button class="sec" onclick="importDiscovered()" style="margin-top:8px">导入勾选的出口</button></div>';
+}
+
+function importDiscovered(){
+  const box = document.getElementById('slotDiscover');
+  if(!box) return;
+  const picked = Array.from(box.querySelectorAll('input[type=checkbox]:checked')).map(el => SLOT_DISCOVER[+el.dataset.idx]);
+  if(!picked.length){ toast('没有勾选任何出口', 'warn'); return; }
+  picked.forEach(c => {
+    if(PROXY_SLOTS.some(s => s.url === c.url)) return;
+    PROXY_SLOTS.push({id: '', name: '槽 ' + (PROXY_SLOTS.length + 1), url: c.url, enabled: true, bound: 0});
+  });
+  renderProxySlots();
+  toast('已加入 ' + picked.length + ' 个槽位，记得点「保存槽位」', 'ok');
+}
+
+async function autoAssignSlots(){
+  // Only fills in accounts that have no exit yet: an account that is already
+  // bound keeps its slot, so this is not a rebalancer.
+  const unbound = (window.ACCOUNTS || []).filter(a => a.enabled && !a.proxySlot);
+  if(!unbound.length){ toast('所有已启用账号都已绑定代理出口', 'ok'); return; }
+  const slots = PROXY_SLOTS.filter(s => s.enabled !== false);
+  if(!slots.length){ toast('没有启用的代理槽，请先在「设置 → 代理槽」添加并保存', 'warn'); return; }
+  let i = 0;
+  for(const a of unbound){
+    const slot = slots[i % slots.length];
+    i++;
+    try{ await postJSON('/accounts/set', {uid: a.uid, proxySlot: slot.id}); }catch(e){}
+  }
+  await loadAccounts();
+  await loadProxySlots();
+  toast('已为 ' + unbound.length + ' 个未绑定账号分配代理出口', 'ok');
+}
+
+function switchMainTab(tab){
+  currentMainTab = tab;
+  // Remember the page across reloads. The URL is updated so the address bar
+  // matches what is on screen and a copied link reopens the same page;
+  // storage covers a plain reload and the ?key= link, which strips the
+  // query string on load.
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    history.replaceState(null, '', url.toString());
+  } catch(e){}
+  try { localStorage.setItem(MAIN_TAB_STORE, tab); } catch(e){}
+  const btnGateway = document.getElementById('btnNavGateway');
+  const btnAnalytics = document.getElementById('btnNavAnalytics');
+  const btnLogs = document.getElementById('btnNavLogs');
+  const btnSettings = document.getElementById('btnNavSettings');
+  const pageGateway = document.getElementById('pageGateway');
+  const pageAnalytics = document.getElementById('pageAnalytics');
+  const pageLogs = document.getElementById('pageLogs');
+  const pageSettings = document.getElementById('pageSettings');
+  const tabs = [
+    ['gateway', btnGateway, pageGateway],
+    ['analytics', btnAnalytics, pageAnalytics],
+    ['logs', btnLogs, pageLogs],
+    ['settings', btnSettings, pageSettings]
+  ];
+  tabs.forEach(([name, btn, page]) => {
+    if(!btn || !page) return;
+    const on = (name === tab);
+    btn.classList.toggle('active', on);
+    page.classList.toggle('active', on);
+  });
+  if(tab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
+  if(tab === 'settings'){ loadSettings(); loadProxySlots(); }
+  if(tab === 'logs'){
+    startLogPolling();
+    fetchNewLogs(true);
+  } else {
+    stopLogPolling();
+  }
+}
+
+/* ---- 系统运行日志模块 ---- */
+let logEntries = [];
+let lastLogId = 0;
+let logFilterLevel = '';
+let logFilterTag = '';
+let logSearchText = '';
+let logAutoRefresh = true;
+let logAutoScroll = true;
+let logPollTimer = null;
+let logFetching = false;
+let logUserScrolledUp = false;
+
+function startLogPolling(){
+  if(logPollTimer) clearInterval(logPollTimer);
+  logPollTimer = setInterval(() => {
+    if(logAutoRefresh && currentMainTab === 'logs'){
+      fetchNewLogs(false);
+    }
+  }, 2000);
+}
+
+function stopLogPolling(){
+  if(logPollTimer){
+    clearInterval(logPollTimer);
+    logPollTimer = null;
+  }
+}
+
+async function fetchNewLogs(forceReset){
+  if(logFetching) return;
+  logFetching = true;
+  const statusEl = document.getElementById('logTerminalStatus');
+  if(statusEl && forceReset) statusEl.textContent = '正在拉取...';
+  try {
+    const since = forceReset ? 0 : lastLogId;
+    const limit = forceReset ? 500 : 200;
+    const data = await getJSON('/logs?since_id=' + since + '&limit=' + limit);
+    if(data && data.logs){
+      if(forceReset){
+        logEntries = data.logs;
+      } else if(data.logs.length > 0){
+        const existingIds = new Set(logEntries.map(x => x.id));
+        data.logs.forEach(item => {
+          if(!existingIds.has(item.id)) logEntries.push(item);
+        });
+        if(logEntries.length > 2000){
+          logEntries = logEntries.slice(-2000);
+        }
+      }
+      if(data.max_id){
+        lastLogId = Math.max(lastLogId, data.max_id);
+      } else if(logEntries.length > 0){
+        lastLogId = logEntries[logEntries.length - 1].id;
+      }
+      renderLogs();
+      updateLogStats();
+    }
+    if(statusEl) statusEl.textContent = '就绪 · ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    if(statusEl) statusEl.textContent = '连接中断: ' + e.message;
+  } finally {
+    logFetching = false;
+  }
+}
+
+function updateLogStats(){
+  const badge = document.getElementById('logStatsBadge');
+  if(!badge) return;
+  let errors = 0, warns = 0;
+  logEntries.forEach(x => {
+    if(x.level === 'ERROR') errors++;
+    else if(x.level === 'WARN') warns++;
+  });
+  let txt = '共 ' + logEntries.length + ' 条';
+  if(errors > 0) txt += ' · <span style="color:var(--bad)">' + errors + ' 错误</span>';
+  if(warns > 0) txt += ' · <span style="color:var(--warn)">' + warns + ' 警告</span>';
+  badge.innerHTML = txt;
+}
+
+function setLogFilterLevel(lvl){
+  logFilterLevel = lvl;
+  ['All', 'Info', 'Warn', 'Error'].forEach(name => {
+    const btn = document.getElementById('btnLogLvl' + name);
+    if(btn){
+      const match = (lvl === '' && name === 'All') || (lvl.toUpperCase() === name.toUpperCase());
+      btn.classList.toggle('active', match);
+    }
+  });
+  renderLogs();
+}
+
+function setLogFilterTag(tag){
+  logFilterTag = tag;
+  const tagMap = {
+    '': 'All',
+    'chat': 'Chat',
+    'tasks': 'Tasks',
+    'scheduler': 'Sched',
+    'accounts': 'Acct',
+    'system': 'Sys'
+  };
+  Object.keys(tagMap).forEach(k => {
+    const btn = document.getElementById('btnLogTag' + tagMap[k]);
+    if(btn){
+      btn.classList.toggle('active', logFilterTag === k);
+    }
+  });
+  renderLogs();
+}
+
+let logSearchDebounce = null;
+function onLogSearchInput(){
+  clearTimeout(logSearchDebounce);
+  logSearchDebounce = setTimeout(() => {
+    const input = document.getElementById('logSearchInput');
+    logSearchText = input ? input.value.trim().toLowerCase() : '';
+    renderLogs();
+  }, 200);
+}
+
+function toggleLogAuto(){
+  logAutoRefresh = !logAutoRefresh;
+  const btn = document.getElementById('btnToggleLogAuto');
+  if(btn){
+    if(logAutoRefresh){
+      btn.textContent = '实时监听中';
+      btn.style.color = 'var(--accent2)';
+      startLogPolling();
+    } else {
+      btn.textContent = '已暂停监听';
+      btn.style.color = 'var(--dim)';
+      stopLogPolling();
+    }
+  }
+}
+
+function toggleLogScroll(){
+  logAutoScroll = !logAutoScroll;
+  const btn = document.getElementById('btnToggleLogScroll');
+  if(btn){
+    btn.textContent = logAutoScroll ? '自动滚屏: 开' : '自动滚屏: 关';
+  }
+  if(logAutoScroll){
+    const body = document.getElementById('logTerminalBody');
+    if(body) body.scrollTop = body.scrollHeight;
+  }
+}
+
+function handleLogTerminalScroll(){
+  const body = document.getElementById('logTerminalBody');
+  if(!body) return;
+  const atBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 40;
+  if(!atBottom && logAutoScroll){
+    logUserScrolledUp = true;
+  } else if(atBottom && logUserScrolledUp){
+    logUserScrolledUp = false;
+  }
+}
+
+function escapeHtml(s){
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderLogs(){
+  const body = document.getElementById('logTerminalBody');
+  if(!body) return;
+
+  const filtered = logEntries.filter(item => {
+    if(logFilterLevel && item.level !== logFilterLevel) return false;
+    if(logFilterTag && item.tag !== logFilterTag) return false;
+    if(logSearchText){
+      const haystack = ((item.msg || '') + ' ' + (item.tag || '') + ' ' + (item.time || '')).toLowerCase();
+      if(!haystack.includes(logSearchText)) return false;
+    }
+    return true;
+  });
+
+  if(filtered.length === 0){
+    body.innerHTML = '<div class="log-empty">暂无匹配的日志记录</div>';
+    return;
+  }
+
+  const htmlParts = [];
+  filtered.forEach(item => {
+    const lvlCls = 'lvl-' + (item.level || 'INFO');
+    const tagCls = 'tag-' + (item.tag || 'system');
+    htmlParts.push(
+      '<div class="log-line">' +
+        '<span class="log-ts">' + escapeHtml(item.time || '') + '</span>' +
+        '<span class="log-lvl ' + lvlCls + '">' + escapeHtml(item.level || 'INFO') + '</span>' +
+        '<span class="log-tag ' + tagCls + '">[' + escapeHtml(item.tag || 'system') + ']</span>' +
+        '<span class="log-msg">' + escapeHtml(item.msg || '') + '</span>' +
+      '</div>'
+    );
+  });
+  body.innerHTML = htmlParts.join('');
+
+  if(logAutoScroll && !logUserScrolledUp){
+    body.scrollTop = body.scrollHeight;
+  }
+}
+
+function copyFilteredLogs(){
+  const filtered = logEntries.filter(item => {
+    if(logFilterLevel && item.level !== logFilterLevel) return false;
+    if(logFilterTag && item.tag !== logFilterTag) return false;
+    if(logSearchText){
+      const haystack = ((item.msg || '') + ' ' + (item.tag || '') + ' ' + (item.time || '')).toLowerCase();
+      if(!haystack.includes(logSearchText)) return false;
+    }
+    return true;
+  });
+  const text = filtered.map(x => '[' + (x.ts || x.time) + '] [' + x.level + '] [' + x.tag + '] ' + x.msg).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    toast('已复制 ' + filtered.length + ' 行日志', 'ok');
+  }).catch(e => {
+    toast('复制失败: ' + e.message, 'bad');
+  });
+}
+
+async function exportLogsFile(){
+  try {
+    const data = await getJSON('/logs?limit=5000');
+    if(!data || !data.logs || !data.logs.length){
+      toast('暂无日志可导出', 'warn');
+      return;
+    }
+    const lines = data.logs.map(x => '[' + (x.ts || x.time) + '] [' + x.level + '] [' + x.tag + '] ' + x.msg);
+    const text = lines.join('\n');
+    const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.download = 'wb-proxy-' + ts + '.log';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('已导出 ' + data.logs.length + ' 行日志', 'ok');
+  } catch(e) {
+    toast('导出日志失败: ' + e.message, 'bad');
+  }
+}
+
+async function clearServerLogs(){
+  if(!confirm('确定要清空网关日志吗？此操作将清空内存中的全部日志缓冲。')) return;
+  try {
+    await postJSON('/logs/clear', {});
+    logEntries = [];
+    lastLogId = 0;
+    renderLogs();
+    updateLogStats();
+    toast('网关日志已清空', 'ok');
+  } catch(e) {
+    toast('清空失败: ' + e.message, 'bad');
+  }
+}
+
+function setAnalyticsRange(range){
+  analyticsRange = range;
+  const btnToday = document.getElementById('btnRangeToday');
+  const btnAll = document.getElementById('btnRangeAll');
+  if(range === 'all'){
+    if(btnToday) btnToday.classList.remove('active');
+    if(btnAll) btnAll.classList.add('active');
+  } else {
+    if(btnToday) btnToday.classList.add('active');
+    if(btnAll) btnAll.classList.remove('active');
+  }
+  if(cachedAnalyticsData){
+    renderAnalytics(cachedAnalyticsData);
+  } else {
+    loadAnalytics();
+  }
+  // The model matrix reads /usage and /usage/perf directly, so it has to be
+  // refetched: without this the table kept showing all-time figures while the
+  // page said "today", which is the inconsistency the range buttons were
+  // meant to remove.
+  loadAnalyticsMatrix();
+}
+
+/* 模型性能指标与用量一览
+ *
+ * Reads the combined view on purpose. The table carries its own 区域
+ * column, so scoping it to the gateway's current exit would hide exactly the
+ * models this page exists to compare. */
+async function loadAnalyticsMatrix(){
+  try{
+    const q = '?realm=all&range=' + encodeURIComponent(analyticsRange || 'today');
+    const [usage, perf, models] = await Promise.all([
+      getJSON('/usage' + q),
+      getJSON('/usage/perf' + q),
+      // The catalog is only a display filter, so a failure here must not
+      // blank the table; null keeps the previous allowlist.
+      getJSON('/v1/models?realm=all').catch(() => null),
+    ]);
+    if(models && models.data) MATRIX_MODELS = new Set(models.data.map(m => m.id));
+    cachedMatrixData = { usage: usage, perf: perf };
+    fillMatrixFilters(usage);
+    renderPerfMatrix(usage, perf);
+  }catch(err){
+    if(!isAuthError(err)) console.error('loadAnalyticsMatrix failed:', err);
+  }
+}
+
+/* Rebuild the two matrix filter dropdowns from the payload just fetched.
+ *
+ * Options are derived from the data rather than from the account pool, so the
+ * list only offers accounts and models that actually have rows - a filter that
+ * can only ever yield an empty table is worse than no filter. A previously
+ * chosen value is kept when it is still present, and cleared when it is not,
+ * which is what happens when the range flips and an account drops out.
+ */
+function fillMatrixFilters(usage){
+  const acctSel = document.getElementById('matrixAcctFilter');
+  const modelSel = document.getElementById('matrixModelFilter');
+  const names = (usage && usage.accounts_map) || {};
+  const modelCount = {};
+  Object.keys((usage && usage.by_model) || {}).forEach(id => {
+    if(!id.endsWith('-model')) modelCount[id] = (usage.by_model[id] || {}).requests || 0;
+  });
+  if(acctSel){
+    const seen = new Set();
+    Object.values((usage && usage.by_model_acct) || {}).forEach(byRealm => {
+      Object.values(byRealm || {}).forEach(byAcct => {
+        Object.keys(byAcct || {}).forEach(uid => {
+          if(uid && uid !== '(unattributed)') seen.add(uid);
+        });
+      });
+    });
+    const opts = Array.from(seen).sort((a, b) => {
+      const na = (names[a] || {}).nickname || a;
+      const nb = (names[b] || {}).nickname || b;
+      return na.localeCompare(nb);
+    });
+    if(matrixAcctFilter && !seen.has(matrixAcctFilter)) matrixAcctFilter = '';
+    acctSel.innerHTML = '<option value="">全部账号</option>' + opts.map(uid => {
+      const info = names[uid] || {};
+      const label = (info.nickname || uid.slice(0, 8)) + ' (' + uid.slice(0, 6) + ')';
+      return '<option value="' + esc(uid) + '"' + (uid === matrixAcctFilter ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+  }
+  if(modelSel){
+    const ids = Object.keys(modelCount).filter(id => modelCount[id] > 0).sort();
+    if(matrixModelFilter && ids.indexOf(matrixModelFilter) === -1) matrixModelFilter = '';
+    modelSel.innerHTML = '<option value="">全部模型</option>' + ids.map(id =>
+      '<option value="' + esc(id) + '"' + (id === matrixModelFilter ? ' selected' : '') + '>' + esc(id) + '</option>'
+    ).join('');
+  }
+}
+
+function renderPerfMatrix(usage, perf){
+  const matrixEl = document.getElementById("perfMatrix");
+  if(!matrixEl) return;
+  const bmPerf = (perf && perf.by_model) || {};
+  const validModels = MATRIX_MODELS;
+  const modelMap = {};
+  Object.entries(usage.by_model || {}).forEach(([id, m]) => {
+    if((!validModels.size || validModels.has(id)) && m.requests > 0 && !id.endsWith('-model')){
+      modelMap[id] = Object.assign({id: id}, m);
+    }
+  });
+  Object.entries(bmPerf).forEach(([id, p]) => {
+    if((!validModels.size || validModels.has(id)) && p.requests > 0 && !id.endsWith('-model') && !modelMap[id]){
+      modelMap[id] = {
+        id: id,
+        requests: p.requests || 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        reasoning_tokens: 0,
+        cached_tokens: 0,
+        total_tokens: 0
+      };
+    }
+  });
+  // One row per (model, exit). A model served by both exits gets two rows,
+  // each carrying its own tokens, latency and speed; the region column then
+  // describes exactly the numbers next to it instead of collapsing both.
+  const realmMap = (usage && usage.by_model_realm) || {};
+  const acctMap = (usage && usage.by_model_acct) || {};
+  const perfAcctMap = (perf && perf.by_model_acct) || {};
+  const rowsData = [];
+  Object.values(modelMap)
+    .sort((a,b) => (b.total_tokens || b.requests) - (a.total_tokens || a.requests))
+    .forEach(m => {
+      if(matrixModelFilter && m.id !== matrixModelFilter) return;
+      const per = realmMap[m.id];
+      const realms = per ? Object.keys(per).filter(r => (per[r].requests || 0) > 0) : [];
+      if(realms.length > 1){
+        // Most-used exit first, so the ordering stays meaningful.
+        realms.sort((x, y) => (per[y].total_tokens || 0) - (per[x].total_tokens || 0));
+      }
+      // Within an exit, one row per account: two accounts sharing an exit are
+      // two different consumers, and merging them hid which one spent what.
+      const parts = [];
+      (realms.length ? realms : ['']).forEach(r => {
+        const accts = ((acctMap[m.id] || {})[r]) || {};
+        const perfAccts = ((perfAcctMap[m.id] || {})[r]) || {};
+        // Union of both maps: a bucket holding only failures exists in perf
+        // alone, and dropping it would hide failures the total counts.
+        const keys = Array.from(new Set(
+          Object.keys(accts).concat(Object.keys(perfAccts))
+        )).filter(a => {
+          const u = accts[a] || {};
+          const p = perfAccts[a] || {};
+          return (u.requests || 0) > 0 || (u.errors || 0) > 0 ||
+                 (p.requests || 0) > 0 || (p.errors || 0) > 0 ||
+                 (p.client_aborted || 0) > 0;
+        });
+        // The account filter narrows the rows themselves, not just their
+        // visibility, so the summary below always matches what is shown.
+        const shown = matrixAcctFilter ? keys.filter(a => a === matrixAcctFilter) : keys;
+        if(shown.length){
+          shown.sort((x, y) =>
+            ((accts[y] || {}).total_tokens || 0) - ((accts[x] || {}).total_tokens || 0));
+          shown.forEach(a => {
+            // Tokens come from usage; a failure-only bucket has none.
+            const u = accts[a] || {requests: 0, prompt_tokens: 0, completion_tokens: 0,
+                                   reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0};
+            parts.push({ stat: u, realm: r, acct: a,
+                         accts: { [a]: u.requests || 0 } });
+          });
+        } else if(!matrixAcctFilter){
+          // No per-account data for this exit (an older log, say): fall back
+          // to the exit totals rather than dropping the row.
+          const fallback = per ? per[r] : m;
+          parts.push({ stat: fallback, realm: r, acct: '',
+                       accts: fallback.accounts || {} });
+        }
+      });
+      parts.forEach((p, i) => {
+        rowsData.push(Object.assign({}, p.stat, {
+          id: m.id, realm: p.realm, acct: p.acct, accts: p.accts,
+          split: parts.length > 1, first: i === 0,
+        }));
+      });
+    });
+
+  const countEm = document.getElementById("matrixModelCount");
+  if(countEm){
+    const nModels = new Set(rowsData.map(r => r.id)).size;
+    const anyFilter = !!(matrixAcctFilter || matrixModelFilter);
+    countEm.textContent = nModels ? ("(有调用的模型: " + nModels +
+      " 个·共 " + rowsData.length + " 行明细" + (anyFilter ? " · 已筛选" : "") + ")") : "";
+  }
+
+  if(!rowsData.length){
+    matrixEl.innerHTML = '<div class="empty">当前版本暂无模型请求或性能数据</div>';
+  } else {
+    const maxTok = Math.max(1, ...rowsData.map(m => m.total_tokens));
+    /* Summary row (Total / All Models).
+     *
+     * With no filter this is the endpoint-wide figure, as before. With a
+     * filter active it is recomputed from the visible rows instead, because a
+     * total that ignores the filter contradicts the rows directly beneath it -
+     * the exact confusion the filter is meant to remove. Latency, speed and
+     * wall time are averages over the filtered rows' own sample counts, so a
+     * barely-used row cannot outvote a heavily-used one.
+     */
+    const filtering = !!(matrixAcctFilter || matrixModelFilter);
+    let sumReq, sumErr, sumTok, sumP, sumC, sumR, totTtft, totTps, totWall, totCache;
+    if(!filtering){
+      sumReq = usage.requests; sumErr = perf.errors; sumTok = usage.total_tokens;
+      sumP = usage.prompt_tokens; sumC = usage.completion_tokens; sumR = usage.reasoning_tokens;
+      totTtft = perf.ttft_ms ? (ms(perf.ttft_ms.avg) + " (P50 " + ms(perf.ttft_ms.p50) + ")") : "-";
+      totTps = perf.tokens_per_sec ? (perf.tokens_per_sec.avg.toFixed(1) + " tok/s") : "-";
+      totWall = perf.wall_ms ? ms(perf.wall_ms.avg) : "-";
+      totCache = perf.cache_hit_pct ? (perf.cache_hit_pct.avg.toFixed(1) + "%") : "-";
+    } else {
+      sumReq = 0; sumErr = 0; sumTok = 0; sumP = 0; sumC = 0; sumR = 0;
+      let ttftW = 0, ttftN = 0, tpsW = 0, tpsN = 0, wallW = 0, wallN = 0, cacheW = 0, cacheN = 0;
+      rowsData.forEach(m => {
+        sumReq += m.requests || 0;
+        sumTok += m.total_tokens || 0;
+        sumP += m.prompt_tokens || 0;
+        sumC += m.completion_tokens || 0;
+        sumR += m.reasoning_tokens || 0;
+        const mp = ((perf && perf.by_model_realm) || {})[m.id] || {};
+        const mpAcctAll = ((perf && perf.by_model_acct) || {})[m.id] || {};
+        const mpRealm = m.realm ? (mp[m.realm] || null) : null;
+        const mpAcct = (m.realm && m.acct && mpAcctAll[m.realm])
+          ? (mpAcctAll[m.realm][m.acct] || null) : null;
+        const e = mpAcct || mpRealm || bmPerf[m.id] || {};
+        sumErr += e.errors || 0;
+        if(e.ttft_ms && e.ttft_ms.samples){ ttftW += e.ttft_ms.avg * e.ttft_ms.samples; ttftN += e.ttft_ms.samples; }
+        if(e.tokens_per_sec && e.tokens_per_sec.samples){ tpsW += e.tokens_per_sec.avg * e.tokens_per_sec.samples; tpsN += e.tokens_per_sec.samples; }
+        if(e.wall_ms && e.wall_ms.samples){ wallW += e.wall_ms.avg * e.wall_ms.samples; wallN += e.wall_ms.samples; }
+        if(e.cache_hit_pct && e.cache_hit_pct.samples){ cacheW += e.cache_hit_pct.avg * e.cache_hit_pct.samples; cacheN += e.cache_hit_pct.samples; }
+      });
+      totTtft = ttftN ? ms(ttftW / ttftN) : "-";
+      totTps = tpsN ? (((tpsW / tpsN)).toFixed(1) + " tok/s") : "-";
+      totWall = wallN ? ms(wallW / wallN) : "-";
+      totCache = cacheN ? ((cacheW / cacheN).toFixed(1) + "%") : "-";
+    }
+    const summaryRow = '<tr style="background:rgba(37,99,235,.06);font-weight:600">'
+      + '<td style="text-align:left" data-label="模型"><b>' + (filtering ? '筛选结果合计 (Filtered)' : '全部模型合计 (Total)') + '</b></td>'
+      + '<td style="text-align:center" data-label="区域"><span style="color:var(--dim)">—</span></td>'
+      + '<td style="text-align:left" data-label="账号"><span style="color:var(--dim)">' + (filtering ? '已筛选' : '全部账号') + '</span></td>'
+      + '<td data-label="请求数">' + fmt(sumReq) + '</td>'
+      + '<td data-label="失败">' + (sumErr
+          ? ('<span style="color:var(--bad)">' + fmt(sumErr) + '</span>')
+          : '<span style="color:var(--dim)">0</span>') + '</td>'
+      + '<td data-label="总 Token"><b style="color:var(--accent)">' + fmt(sumTok) + '</b></td>'
+      + '<td class="triple" data-label="输入 / 输出 / 思考">' + tripleTokens(sumP, sumC, sumR) + '</td>'
+      + '<td data-label="首字延迟">' + totTtft + '</td>'
+      + '<td data-label="生成速度"><b style="color:var(--accent2)">' + totTps + '</b></td>'
+      + '<td data-label="端到端耗时">' + totWall + '</td>'
+      + '<td data-label="缓存命中">' + totCache + '</td>'
+      + '<td data-label="用量占比">100%</td>'
+      + '</tr>';
+
+    const rows = rowsData.map(m => {
+      // Latency/speed come from the matching (model, exit) bucket when the
+      // backend supplied one; otherwise fall back to the model-wide figure.
+      const mp = ((perf && perf.by_model_realm) || {})[m.id] || {};
+      const mpAcctAll = ((perf && perf.by_model_acct) || {})[m.id] || {};
+      const mpRealm = m.realm ? (mp[m.realm] || null) : null;
+      // Most specific first: this account on this exit, then the exit, then
+      // the model. A split row must not borrow another account's latency.
+      const mpAcct = (m.realm && m.acct && mpAcctAll[m.realm])
+        ? (mpAcctAll[m.realm][m.acct] || null) : null;
+      const mpEff = mpAcct || mpRealm || bmPerf[m.id] || {};
+      const m_ttft = mpEff.ttft_ms ? (ms(mpEff.ttft_ms.avg) + " <span style='color:var(--dim);font-size:11px'>(P50 " + ms(mpEff.ttft_ms.p50) + ")</span>") : "-";
+      const m_tps = mpEff.tokens_per_sec ? ('<b style="color:var(--accent2)">' + mpEff.tokens_per_sec.avg.toFixed(1) + '</b> <span style="font-size:11px;color:var(--dim)">tok/s</span>') : "-";
+      const m_wall = mpEff.wall_ms ? ms(mpEff.wall_ms.avg) : "-";
+      const m_cache = (m.prompt_tokens > 0) ? pct(m.cached_tokens / m.prompt_tokens * 100) : (mpEff.cache_hit_pct ? mpEff.cache_hit_pct.avg.toFixed(1) + "%" : "-");
+      const pctTok = Math.round(m.total_tokens / maxTok * 100);
+      // 0 is a real result (the model ran and never failed), so it stays
+      // visible as a muted zero rather than the dash used for no data.
+      const errCell = mpEff.errors
+        ? ('<span style="color:var(--bad)">' + fmt(mpEff.errors) + '</span>')
+        : '<span style="color:var(--dim)">0</span>';
+      const acctsMap = usage.accounts_map || {};
+      // This row's own accounts, not every account that touched the model.
+      const mAccts = m.accts || m.accounts || {};
+      const acctEntries = Object.entries(mAccts);
+      let realmCell = '<span style="color:var(--dim)">—</span>';
+      let acctCell = '<span style="color:var(--dim)">—</span>';
+      const realms = new Set();
+      if(m.realm){
+        realms.add(m.realm);
+      } else {
+        acctEntries.forEach(([uid]) => {
+          const info = acctsMap[uid] || {};
+          if(info.realm) realms.add(info.realm);
+        });
+      }
+      if(realms.size === 1){
+        const r = Array.from(realms)[0];
+        realmCell = r === 'cn' ? '<span class="realm-badge-cn">国内版</span>' : '<span class="realm-badge-intl">国际版</span>';
+      } else if(realms.size > 1){
+        realmCell = '<span class="realm-badge-intl">国际版</span> <span class="realm-badge-cn">国内版</span>';
+      } else {
+        // No account attribution on these rows (a test call,
+        // say). Decide from the model id itself: this table
+        // spans both realms, so the gateway's current exit
+        // would mislabel domestic-only models.
+        const isIntlOnly = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gemini-3.5-flash'].includes(m.id);
+        const isCnOnly = ['deepseek-v4-pro', 'glm-5.1', 'glm-5v-turbo', 'kimi-k3-1', 'kimi-k2.7', 'minimax-m3'].includes(m.id);
+        realmCell = isIntlOnly ? '<span class="realm-badge-intl">国际版</span>'
+          : (isCnOnly ? '<span class="realm-badge-cn">国内版</span>'
+            : '<span style="color:var(--dim)">—</span>');
+      }
+      if(acctEntries.length === 1 && acctEntries[0][0] === '(unattributed)'){
+        acctCell = '<span style="color:var(--dim)">—</span>';
+      } else if(acctEntries.length === 1){
+        const [uid, count] = acctEntries[0];
+        const info = acctsMap[uid] || {};
+        const name = esc(info.nickname || uid.slice(0, 8));
+        acctCell = '<b>' + name + '</b>';
+      } else if(acctEntries.length > 1){
+        acctCell = acctEntries.map(([uid, count]) => {
+          const info = acctsMap[uid] || {};
+          const name = esc(info.nickname || uid.slice(0, 6));
+          return '<span class="badge mini" style="margin:1px 2px">' + name + ' <span style="color:var(--dim)">(' + count + ')</span></span>';
+        }).join('');
+      }
+      return '<tr>'
+        + '<td style="text-align:left" class="mono" data-label="模型"><b>' + esc(m.id) + '</b></td>'
+        + '<td style="text-align:center;white-space:nowrap" data-label="区域">' + realmCell + '</td>'
+        + '<td style="text-align:left" data-label="账号">' + acctCell + '</td>'
+        + '<td data-label="请求数">' + fmt(m.requests) + '</td>'
+        + '<td data-label="失败">' + errCell + '</td>'
+        + '<td data-label="总 Token"><b>' + fmt(m.total_tokens) + '</b></td>'
+        + '<td class="triple" data-label="输入 / 输出 / 思考">' + tripleTokens(m.prompt_tokens, m.completion_tokens, m.reasoning_tokens) + '</td>'
+        + '<td data-label="首字延迟">' + m_ttft + '</td>'
+        + '<td data-label="生成速度">' + m_tps + '</td>'
+        + '<td data-label="端到端耗时">' + m_wall + '</td>'
+        + '<td data-label="缓存命中">' + m_cache + '</td>'
+        + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
+        + '</tr>';
+    }).join('');
+
+    matrixEl.innerHTML = '<table class="data-cards"><thead><tr>'
+      + '<th style="text-align:left">模型名称</th>'
+      + '<th style="text-align:center;width:76px">区域</th>'
+      + '<th style="text-align:left">账号</th>'
+      + '<th>请求数</th><th>失败</th><th>总 Token</th><th style="min-width:190px">输入 / 输出 / 思考</th>'
+      + '<th>首字延迟 (TTFT)</th><th>生成速度</th><th>端到端耗时</th><th>缓存命中率</th><th>用量占比</th>'
+      + '</tr></thead><tbody>' + summaryRow + rows + '</tbody></table>';
+  }
+
+}
+
+async function loadAnalytics(){
+  try {
+    const data = await getJSON('/usage/analytics');
+    cachedAnalyticsData = data;
+    renderAnalytics(data);
+  } catch(err) {
+    console.error('loadAnalytics failed:', err);
+  }
+}
+
+function renderAnalytics(data){
+  if(!data || !data.summary) return;
+  const isToday = (analyticsRange === 'today');
+  const sumToday = data.summary.today || {};
+  const sumAll = data.summary.all_time || {};
+  const currentSum = isToday ? sumToday : sumAll;
+
+  // KPI 1: follows the range selector. It used to be hard-wired to the Today
+  // bucket while the card next to it was hard-wired to All Time, so the range
+  // buttons appeared to do nothing to the headline number.
+  const elTodayTok = document.getElementById('kpiTodayTokens');
+  const elTodayDetail = document.getElementById('kpiTodayTokensDetail');
+  const elTodayTitle = document.getElementById('kpiRangeTokenTitle');
+  if(elTodayTitle) elTodayTitle.textContent = isToday ? '今日消耗 Token' : '全部历史消耗 Token';
+  if(elTodayTok) elTodayTok.textContent = fmt(currentSum.total_tokens || 0);
+  if(elTodayDetail) elTodayDetail.innerHTML =
+    '<span style="color:var(--accent)">输入 ' + fmt(currentSum.prompt_tokens || 0) + '</span>' +
+    ' <span style="color:var(--dim-light)">/</span> ' + '<span style="color:var(--accent2)">输出 ' + fmt(currentSum.completion_tokens || 0) + '</span>' +
+    ' <span style="color:var(--dim-light)">/</span> ' + '<span style="color:var(--think)">思考 ' + fmt(currentSum.reasoning_tokens || 0) + '</span>';
+
+  // KPI 2: always the all-time figure, as the stable reference next to KPI 1.
+  const elTotalTok = document.getElementById('kpiTotalTokens');
+  const elTotalDetail = document.getElementById('kpiTotalTokensDetail');
+  if(elTotalTok) elTotalTok.textContent = fmt(sumAll.total_tokens || 0);
+  if(elTotalDetail) elTotalDetail.innerHTML =
+    '<span style="color:var(--accent)">输入 ' + fmt(sumAll.prompt_tokens || 0) + '</span>' +
+    ' <span style="color:var(--dim-light)">/</span> ' + '<span style="color:var(--accent2)">输出 ' + fmt(sumAll.completion_tokens || 0) + '</span>' +
+    ' <span style="color:var(--dim-light)">/</span> ' + '<span style="color:var(--think)">思考 ' + fmt(sumAll.reasoning_tokens || 0) + '</span>' +
+    // Two cards showing the same number reads as a broken counter rather than
+    // as "there is nothing older to show", so say which case it is.
+    ((!isToday && (sumAll.total_tokens || 0) > 0)
+      ? '<br><span style="color:var(--dim);font-size:11px">当前为「全部历史」视图，两张卡片口径相同</span>'
+      : ((isToday && (sumAll.total_tokens || 0) === (sumToday.total_tokens || 0) && (sumAll.total_tokens || 0) > 0)
+        ? '<br><span style="color:var(--dim);font-size:11px">与今日相同：日志中暂无更早的数据</span>'
+        : ''));
+
+  // KPI 3: 网关平均生成速度
+  const elAvgSpeed = document.getElementById('kpiAvgSpeed');
+  const elAvgLatency = document.getElementById('kpiAvgLatency');
+  if(elAvgSpeed) elAvgSpeed.innerHTML = (currentSum.speed_avg ? currentSum.speed_avg.toFixed(1) : '0.0') + ' <span style="font-size:12px;font-weight:400;color:var(--dim)">tok/s</span>';
+  if(elAvgLatency) elAvgLatency.textContent = '平均首字延迟 ' + (currentSum.ttft_ms_avg ? fmt(currentSum.ttft_ms_avg) + ' ms' : '—') + ' · 耗时 ' + (currentSum.elapsed_ms_avg ? (currentSum.elapsed_ms_avg / 1000).toFixed(2) + ' s' : '—');
+
+  // KPI 4: 缓存命中率
+  const elCacheRate = document.getElementById('kpiCacheRate');
+  if(elCacheRate) elCacheRate.textContent = (currentSum.cache_hit_pct != null ? currentSum.cache_hit_pct.toFixed(1) : '0.0') + '%';
+
+  // KPI 5: 请求数与成功率
+  const elReqTitle = document.getElementById('kpiReqTitle');
+  const elReqCount = document.getElementById('kpiReqCount');
+  const elReqSuccess = document.getElementById('kpiReqSuccess');
+  if(elReqTitle) elReqTitle.textContent = (isToday ? '今日' : '累计') + '请求数 & 成功率';
+  const totalReq = (currentSum.requests || 0) + (currentSum.errors || 0);
+  const successPct = totalReq > 0 ? ((currentSum.requests / totalReq) * 100).toFixed(1) : '100.0';
+  if(elReqCount) elReqCount.textContent = fmt(currentSum.requests || 0) + ' 次';
+  if(elReqSuccess) elReqSuccess.textContent = '成功率 ' + successPct + '% · 失败 ' + (currentSum.errors || 0);
+
+  // Table 1: 账号透视表
+  const acctTbody = document.getElementById('analyticsAccountTbody');
+  const acctCountEm = document.getElementById('analyticsAcctCount');
+  let accts = (data.accounts || []).filter(a => {
+    if(a.uid === '(unattributed)' && !(a.today.requests || a.all_time.requests)) return false;
+    return true;
+  });
+  if(acctCountEm) acctCountEm.textContent = accts.length ? '(' + accts.length + ' 个账号)' : '';
+
+  if(acctTbody){
+    if(!accts.length){
+      acctTbody.innerHTML = '<tr><td colspan="7" class="empty">暂无账号用量数据</td></tr>';
+    } else {
+      acctTbody.innerHTML = accts.map(a => {
+        const st = isToday ? a.today : a.all_time;
+        const modelsMap = isToday ? a.today_models : a.all_models;
+        const entries = Object.entries(modelsMap || {}).sort((x, y) => (y[1].tokens || 0) - (x[1].tokens || 0));
+
+        let pills = '<span style="color:var(--dim)">无调用</span>';
+        if(entries.length){
+          pills = entries.map(([mid, ms]) => {
+            return '<span class="model-pill">'
+              + '<b style="color:var(--fg)">' + esc(mid) + '</b>: '
+              + ms.requests + '次 · <b style="color:var(--accent)">' + fmt(ms.tokens) + '</b> tok'
+              + '</span>';
+          }).join('');
+        }
+
+        const realmBadge = a.realm === 'cn'
+          ? '<span class="badge warn" style="font-size:10px">国内版</span>'
+          : '<span class="badge s" style="font-size:10px">国际版</span>';
+
+        let creditStr = '<span style="color:var(--dim)">—</span>';
+        if(a.credits && a.credits.remain != null){
+          if(a.credits.size){
+            creditStr = '<b style="color:var(--accent2)">' + fmt(a.credits.remain) + '</b> <span style="color:var(--dim);font-size:11px">/ ' + fmt(a.credits.size) + ' 积分</span>';
+          } else {
+            creditStr = '<b style="color:var(--accent2)">' + fmt(a.credits.remain) + '</b> <span style="color:var(--dim);font-size:11px">积分</span>';
+          }
+        }
+
+        return '<tr>'
+          + '<td style="text-align:left">'
+          +   '<b>' + esc(a.nickname || a.uid) + '</b>'
+          +   '<div style="color:var(--dim);font-size:11px;font-family:monospace">' + esc((a.uid || '').slice(0, 10)) + '...</div>'
+          + '</td>'
+          + '<td>' + realmBadge + '</td>'
+          + '<td>' + creditStr + '</td>'
+          + '<td>' + fmt(st.requests || 0) + '</td>'
+          + '<td><b style="color:var(--accent)">' + fmt(st.total_tokens || 0) + '</b></td>'
+          + '<td><b style="color:var(--accent2)">' + (st.credit != null ? Number(st.credit).toFixed(2) : '0.00') + '</b></td>'
+          + '<td style="text-align:left;max-width:440px">' + pills + '</td>'
+          + '</tr>';
+      }).join('');
+    }
+  }
+}
+</script>
+</body>
+</html>

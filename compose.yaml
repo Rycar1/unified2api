@@ -20,7 +20,11 @@ services:
       TW2A_WORK_MODE: auto
       SECURE_COOKIE: "false"
       UNIFIED_ALLOW_RESTART: "true"
+      WORKBUDDY_HUB_URL: http://workbuddy-hub:8788
       TZ: Asia/Shanghai
+    depends_on:
+      workbuddy-hub:
+        condition: service_healthy
     volumes:
       - trae-auth:/app/auths
       - trae-data:/app/trae-data
@@ -30,7 +34,24 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+  workbuddy-hub:
+    build: ./vendor/workbuddy2api-hub
+    restart: unless-stopped
+    environment:
+      API_KEY: ${UNIFIED_API_KEY:?Set UNIFIED_API_KEY}
+      PANEL_PASSWORD: ${ADMIN_KEY:?Set ADMIN_KEY}
+      TZ: Asia/Shanghai
+    volumes:
+      - hub-accounts:/app/accounts
+      - hub-usage:/app/usage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 volumes:
   trae-auth:
   trae-data:
   buddy-data:
+  hub-accounts:
+  hub-usage:

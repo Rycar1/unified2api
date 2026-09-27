@@ -6,8 +6,8 @@
 
 ## 功能
 
-- 一个后端进程和一个管理控制台
-- TRAE、CodeBuddy、MonkeyCode 多账号管理
+- 一个统一 API 和管理控制台；WorkBuddy 国际站账号池在内部网络运行
+- TRAE、CodeBuddy、MonkeyCode 多账号管理；WorkBuddy AI 国外站独立连接
 - 三个平台启用账号一键签到并刷新额度
 - 平台内账号池、状态切换和失败重试
 - 自定义 `Base URL + API Key` 接入
@@ -91,6 +91,12 @@ MonkeyCode 使用平台任务执行对话。账号如果已有正在运行的官
 ```
 
 上游 API Key 只保存在服务端，管理接口不会回显完整 Key。
+
+### WorkBuddy AI 国外站（本地）
+
+运行 `setup.ps1` 后，在「账号」→「添加账号」→「WorkBuddy AI 国外」点击「打开登录页面」，在官方国际站完成授权。可以重复登录添加多个账号；账号会保存在独立的 Docker 数据卷中，并由国际站账号池轮换使用，不需要启动 WorkBuddy AI 桌面端。国外站账号与国内 CodeBuddy 账号分开显示，客户端使用 `workbuddy/模型名` 调用。账号池只在 Docker 内部网络开放，凭据不会返回给浏览器。
+
+国际站登录和中转基于 [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)（MIT License），源码及许可证保留在 `vendor/workbuddy2api-hub`。旧版手工配置的 `workboddy-proxy` 连接仍可继续使用；新网页登录使用独立的 `hub` 接入方式。备份和迁移时需要同时保留 `hub-accounts` Docker 数据卷。
 
 ## API 示例
 

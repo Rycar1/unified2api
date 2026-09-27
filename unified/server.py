@@ -18,6 +18,7 @@ from core import converter
 from .trae import Trae
 from .custom import Connections
 from .monkey_login import MonkeyLogin
+from .workbuddy_login import WorkBuddyLogin
 from .errors import safe_error_message
 from .features import (AutomationManager, BackupManager, RequestLog,
                        RequestLogMiddleware, RouteManager, UnifiedConfig)
@@ -339,6 +340,16 @@ def create_app(native=None, buddy=None):
                       "enabled": not a["disabled"], "status": "paused" if a["disabled"] else "cooling" if a["cooling"] else "ready",
                       "remaining": a["balance"] / 1000, "daily_tokens": a["daily_token_balance"], "last_error": a.get("reason", "")}
                      for a in monkey.get("accounts", [])]
+        if any(c.get("adapter") == "hub" for c in connections.rows()):
+            try:
+                hub_accounts = (await workbuddy_login.hub("GET", "/accounts?realm=intl")).get("accounts", [])
+                rows += [{"id": a["uid"], "uid": a["uid"], "provider": "workbuddy_intl",
+                          "name": a.get("nickname") or a["uid"], "enabled": a.get("enabled", False),
+                          "status": "paused" if not a.get("enabled") else "cooling" if a.get("inCooldown") else "ready",
+                          "expires_at": (a.get("expiresAt") or 0) * 1000}
+                         for a in hub_accounts if isinstance(a, dict) and isinstance(a.get("uid"), str)]
+            except HTTPException:
+                pass
         return {"accounts": rows, "connections": connections.rows(), "keys": keys, "pool": settings, "metrics": metrics.snapshot(),
                 "models": (await api.models())["data"], "routes": routes.rows(), "automation": automation.settings(),
                 "automation_history": unified_config.get("automation_history", [])[:10],
@@ -686,6 +697,10 @@ def create_app(native=None, buddy=None):
 
     monkey_login = MonkeyLogin(store, monkey_request)
     monkey_login.register(app, body_json)
+    workbuddy_login = WorkBuddyLogin(store, connections, os.environ.get("UNIFIED_API_KEY", ""),
+                                     os.environ.get("ADMIN_KEY", ""),
+                                     os.environ.get("WORKBUDDY_HUB_URL", "http://workbuddy-hub:8788"))
+    workbuddy_login.register(app, body_json)
 
     @app.get("/admin/downloads/monkey-login-helper.zip")
     async def login_helper_download(req: Request):
@@ -701,6 +716,7 @@ def create_app(native=None, buddy=None):
     result.state.buddy, result.state.native = buddy, native
     result.state.connections = connections
     result.state.monkey_login = monkey_login
+    result.state.workbuddy_login = workbuddy_login
     return result
 
 

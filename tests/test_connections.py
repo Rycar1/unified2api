@@ -69,6 +69,119 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post(self.path, headers=self.csrf, json=self.body)
         self.assertEqual(response.status_code, 200, response.text)
 
+    async def test_workbuddy_international_discovery_and_call(self):
+        calls = []
+        def upstream(request):
+            calls.append(request)
+            self.assertEqual(request.headers["authorization"], "Bearer private-upstream-key")
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [
+                    {"id": "cn/glm", "site": "cn", "site_model_id": "glm"},
+                    {"id": "intl/claude-sonnet", "site": "intl", "site_model_id": "claude-sonnet"},
+                ]})
+            self.assertEqual(request.headers["x-wb-site"], "intl")
+            self.assertEqual(json.loads(request.content)["model"], "claude-sonnet")
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        self.app.state.connections.transport = httpx.MockTransport(upstream)
+        config = self.body | {"id": "workbuddy", "kind": "workbuddy_intl", "models": []}
+        discovered = await self.client.post(self.path + "/discover", headers=self.csrf, json=config)
+        self.assertEqual(discovered.status_code, 200, discovered.text)
+        self.assertEqual(discovered.json()["models"], ["claude-sonnet"])
+        config["models"] = discovered.json()["models"]
+        created = await self.client.post(self.path, headers=self.csrf, json=config)
+        self.assertEqual(created.status_code, 200, created.text)
+        listed = (await self.client.get("/v1/models", headers=self.api_headers)).json()["data"]
+        self.assertIn("workbuddy/claude-sonnet", [item["id"] for item in listed])
+        call = await self.client.post("/v1/chat/completions", headers=self.api_headers,
+            json={"model": "workbuddy/claude-sonnet", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(call.status_code, 200, call.text)
+        self.assertEqual(call.json()["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn(config["key"], (await self.client.get("/admin/api/unified/overview")).text)
+
+    async def test_workbuddy_browser_login_saves_separate_connection(self):
+        def helper(request):
+            if request.url.path == "/panel/login":
+                return httpx.Response(200, json={"token": "panel-session"})
+            self.assertEqual(request.headers["x-panel-token"], "panel-session")
+            if request.url.path == "/accounts/login/start":
+                self.assertEqual(json.loads(request.content), {"realm": "intl", "platform": "CLI"})
+                return httpx.Response(200, json={"state": "hub-state", "authUrl": "https://www.workbuddy.ai/login?state=test"})
+            if request.url.path == "/accounts/login/poll":
+                return httpx.Response(200, json={"status": "ok", "account": {"uid": "foreign-user"}})
+            if request.url.path == "/accounts":
+                return httpx.Response(200, json={"accounts": [{"uid": "foreign-user", "nickname": "Foreign", "enabled": True}]})
+            return httpx.Response(404)
+        def relay(request):
+            self.assertEqual(request.headers["x-realm"], "intl")
+            return httpx.Response(200, json={"data": [
+                {"id": "fast-model"}]})
+        self.app.state.workbuddy_login.client_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(helper))
+        self.app.state.workbuddy_login.api_key = "client-key"
+        self.app.state.connections.transport = httpx.MockTransport(relay)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://localhost:8080") as local:
+            login = await local.post("/admin/api/login", json={"key": "long-admin-key-for-tests"})
+            csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            start = await local.post("/admin/api/unified/workbuddy/login", headers=csrf, json={"name": "Intl"})
+            self.assertEqual(start.status_code, 200, start.text)
+            self.assertEqual(start.json()["url"].split("?")[0], "https://www.workbuddy.ai/login")
+            fid = start.json()["id"]
+            status = await local.get(f"/admin/api/unified/workbuddy/login/{fid}")
+            self.assertEqual(status.json()["state"], "success", status.text)
+            overview = (await local.get("/admin/api/unified/overview")).json()
+            connection = next(item for item in overview["connections"] if item["kind"] == "workbuddy_intl")
+            self.assertEqual(connection["adapter"], "hub")
+            self.assertEqual(connection["models"], ["fast-model"])
+            self.assertIn("foreign-user", [a["uid"] for a in overview["accounts"] if a["provider"] == "workbuddy_intl"])
+            self.assertNotIn("panel-session", json.dumps(overview))
+
+    async def test_workbuddy_hub_models_and_chat_use_international_realm(self):
+        seen = []
+        def hub(request):
+            seen.append(request)
+            self.assertEqual(request.headers["x-realm"], "intl")
+            self.assertEqual(request.headers["authorization"], "Bearer private-upstream-key")
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "claude-sonnet"}]})
+            self.assertEqual(json.loads(request.content)["model"], "claude-sonnet")
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        self.app.state.connections.transport = httpx.MockTransport(hub)
+        body = self.body | {"id": "workbuddy", "kind": "workbuddy_intl", "adapter": "hub", "models": []}
+        discovered = await self.client.post(self.path + "/discover", headers=self.csrf, json=body)
+        self.assertEqual(discovered.status_code, 200, discovered.text)
+        self.assertEqual(discovered.json()["models"], ["claude-sonnet"])
+        body["models"] = discovered.json()["models"]
+        self.assertEqual((await self.client.post(self.path, headers=self.csrf, json=body)).status_code, 200)
+        response = await self.client.post("/v1/chat/completions", headers=self.api_headers,
+            json={"model": "workbuddy/claude-sonnet", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(len(seen), 2)
+
+    async def test_workbuddy_local_import_requires_admin_and_saves_verified_connection(self):
+        def helper(request):
+            if request.url.path == "/panel/login":
+                return httpx.Response(200, json={"token": "panel-session"})
+            self.assertEqual(request.url.path, "/accounts")
+            return httpx.Response(200, json={"accounts": [{"uid": "foreign-user", "enabled": True}]})
+        def relay(request):
+            self.assertEqual(request.headers["x-realm"], "intl")
+            return httpx.Response(200, json={"data": [
+                {"id": "fast-model"}]})
+        self.app.state.workbuddy_login.client_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(helper))
+        self.app.state.workbuddy_login.api_key = "client-key"
+        self.app.state.connections.transport = httpx.MockTransport(relay)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://localhost:8080") as local:
+            self.assertEqual((await local.post("/admin/api/unified/workbuddy/import", json={})).status_code, 401)
+            login = await local.post("/admin/api/login", json={"key": "long-admin-key-for-tests"})
+            csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            saved = await local.post("/admin/api/unified/workbuddy/import", headers=csrf, json={"name": "Intl"})
+            self.assertEqual(saved.status_code, 200, saved.text)
+            overview = (await local.get("/admin/api/unified/overview")).json()
+            connection = next(item for item in overview["connections"] if item["kind"] == "workbuddy_intl")
+            self.assertEqual(connection["models"], ["fast-model"])
+            self.assertEqual(connection["adapter"], "hub")
+
     async def test_crud_persistence_validation_and_csrf(self):
         self.assertEqual((await self.client.post(self.path, json=self.body)).status_code, 403)
         for changes in ({"id": "trae"}, {"base_url": "file:///tmp"}, {"base_url": "https://user:password@host/v1"}, {"key": "bad\nkey"}, {"enabled": "false"}, {"models": "x"}):

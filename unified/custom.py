@@ -28,8 +28,8 @@ class Connections:
         self.lock = threading.RLock()
         self.data = json.loads(path.read_text("utf-8")) if path.exists() else {}
 
-    def client(self):
-        return httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(300, connect=20),
+    def client(self, kind="openai"):
+        return httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(900 if kind == "workbuddy_intl" else 300, connect=20),
                                  follow_redirects=False, trust_env=False)
 
     def get(self, cid):
@@ -45,7 +45,7 @@ class Connections:
 
     def validate(self, body, old=None):
         row = dict(old or {})
-        for field in ("id", "name", "base_url", "key", "models", "enabled"):
+        for field in ("id", "name", "base_url", "key", "models", "enabled", "kind", "adapter"):
             if field in body:
                 if field == "key" and old and body[field] == "":
                     continue
@@ -73,6 +73,12 @@ class Connections:
         if not isinstance(models, list) or len(models) > 2000 or any(not isinstance(m, str) or not m.strip() or len(m) > 256 or any(ord(c) < 32 for c in m) for m in models):
             raise HTTPException(400, "模型列表格式无效")
         row["models"] = list(dict.fromkeys(m.strip() for m in models))
+        row.setdefault("kind", "openai")
+        if not isinstance(row["kind"], str) or row["kind"] not in {"openai", "workbuddy_intl"}:
+            raise HTTPException(400, "不支持的服务类型")
+        row.setdefault("adapter", "relay")
+        if row["adapter"] not in {"relay", "hub"} or (row["adapter"] == "hub" and row["kind"] != "workbuddy_intl"):
+            raise HTTPException(400, "不支持的 WorkBuddy 接入方式")
         row.setdefault("enabled", True)
         if type(row["enabled"]) is not bool:
             raise HTTPException(400, "启用状态必须为布尔值")
@@ -104,8 +110,9 @@ class Connections:
         old = self.get(body["existing_id"]) if body.get("existing_id") else None
         row = self.validate(body, old)
         try:
-            async with self.client() as client:
-                async with client.stream("GET", row["base_url"] + "/models", headers={"Authorization": "Bearer " + row["key"]}, timeout=30) as response:
+            async with self.client(row["kind"]) as client:
+                async with client.stream("GET", row["base_url"] + "/models", headers={"Authorization": "Bearer " + row["key"],
+                                          **({"X-Realm": "intl"} if row.get("adapter") == "hub" else {})}, timeout=30) as response:
                     if response.status_code != 200:
                         detail = await _bounded_body(response)
                         raise HTTPException(502, "模型列表读取失败：" + safe_error_message(detail, response.status_code, (row["key"],)))
@@ -116,7 +123,17 @@ class Connections:
                             raise ValueError("missing model list")
                     except (ValueError, TypeError):
                         raise HTTPException(502, "模型列表响应格式无效：" + safe_error_message(raw, response.status_code, (row["key"],))) from None
-                models = [m["id"] for m in data["data"] if isinstance(m, dict) and isinstance(m.get("id"), str)]
+                if row["kind"] == "workbuddy_intl" and row.get("adapter") != "hub":
+                    # The relay may expose CN and international catalogues together.
+                    # Never silently import the CN models for an international connection.
+                    models = [m.get("site_model_id") if isinstance(m.get("site_model_id"), str)
+                              else m["id"].removeprefix("intl/")
+                              for m in data["data"] if isinstance(m, dict) and m.get("site") == "intl"
+                              and isinstance(m.get("id"), str)]
+                    if not models:
+                        raise HTTPException(502, "中转未返回国际站模型；请检查 WorkBuddy AI 已登录，并将中转站点设为 intl 或 both")
+                else:
+                    models = [m["id"] for m in data["data"] if isinstance(m, dict) and isinstance(m.get("id"), str)]
                 row["models"] = models
                 return {"models": self.validate(row)["models"]}
         except httpx.HTTPError as exc:
@@ -134,11 +151,15 @@ class Connections:
             raise HTTPException(503, "自定义服务已暂停")
         if path not in {"/v1/chat/completions", "/v1/responses"}:
             raise HTTPException(400, "自定义服务支持 Chat Completions / Responses，具体以该服务能力为准")
+        if row.get("kind") == "workbuddy_intl" and row.get("adapter") != "hub" and path != "/v1/chat/completions":
+            raise HTTPException(400, "WorkBuddy AI 中转仅支持 Chat Completions")
         started = False
         try:
-            async with self.client() as client:
+            async with self.client(row.get("kind", "openai")) as client:
                 async with client.stream("POST", row["base_url"] + path.removeprefix("/v1"), content=body,
-                        headers={"Authorization": "Bearer " + row["key"], "Content-Type": "application/json"}) as response:
+                        headers={"Authorization": "Bearer " + row["key"], "Content-Type": "application/json",
+                                 **({"X-Realm": "intl"} if row.get("adapter") == "hub" else
+                                    {"x-wb-site": "intl"} if row.get("kind") == "workbuddy_intl" else {})}) as response:
                     if response.status_code >= 300:
                         detail = await _bounded_body(response)
                         raise HTTPException(response.status_code if response.status_code >= 400 else 502,
