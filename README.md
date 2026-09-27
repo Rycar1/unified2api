@@ -1,43 +1,76 @@
-# Unified2API
+<p align="center">
+  <img src="images/unified2api-logo.png" alt="Unified2API Logo" width="116">
+</p>
 
-把 TRAE、CodeBuddy(国内)、Workbuddy(国际)、MonkeyCode 多账号和自定义 OpenAI 兼容服务集中到一个控制台，通过统一的 OpenAI 风格 API 调用。
+<h1 align="center">Unified2API</h1>
 
-> 本项目用于个人账号与本地服务管理。请遵守对应平台的服务条款，并妥善保管账号凭据和 API 密钥。
+<p align="center">
+  一个控制台管理多个 AI 平台账号，用统一的 OpenAI 风格 API 调用模型。
+</p>
 
-## 功能
+<p align="center">
+  TRAE · CodeBuddy 国内 · WorkBuddy AI 国际站 · MonkeyCode · 自定义服务
+</p>
 
-- 一个统一 API 和管理控制台；WorkBuddy 国际站账号池在内部网络运行
-- TRAE、CodeBuddy、MonkeyCode 多账号管理；WorkBuddy AI 国外站独立连接
-- 三个平台启用账号一键签到并刷新额度
-- 平台内账号池、状态切换和失败重试
-- 自定义 `Base URL + API Key` 接入
-- 统一模型目录和平台前缀路由
-- 智能路由别名、自动故障转移、目标冷却和延迟优选
-- 持久化调用记录、成功率、耗时与 Token 统计（不保存对话正文）
-- 定时签到、余额刷新、低余额与失败 Webhook 告警
-- 密码加密的账号与配置备份恢复
-- OpenAI Chat Completions 兼容接口
-- CodeBuddy Responses 和 Messages 接口
-- 独立客户端 API 密钥
-- Windows MonkeyCode 登录助手
-- React 响应式管理界面
+## 界面预览
 
-![image.png](.\images\PixPin_2026-09-27_22-37-42.png)
-## 页面与端口
+![Unified2API 控制台概览](images/overview.png)
 
-| 用途 | 默认地址 |
+<details>
+<summary>查看账号池、智能路由和用量统计</summary>
+
+### 多平台账号池
+
+![TRAE、CodeBuddy 与 WorkBuddy 独立账号池](images/accounts.png)
+
+### 智能路由
+
+![智能路由列表](images/routes.png)
+
+### Token 用量统计
+
+![Token 活动日历与模型分布](images/usage.png)
+
+### 调用记录
+
+![调用记录与诊断信息](images/request-logs.png)
+
+### 自动任务
+
+![签到、余额刷新和 Webhook 设置](images/automation.png)
+
+</details>
+
+## 能做什么
+
+| 功能 | 说明 |
 |---|---|
-| 管理控制台 | `http://localhost:8080/admin/` |
-| API Base URL | `http://localhost:8080/v1` |
-| 健康检查 | `http://localhost:8080/healthz` |
+| 多平台账号池 | 集中管理账号；国内 CodeBuddy 与国际 WorkBuddy 分开展示 |
+| 统一模型入口 | 通过 `/v1/models` 查看模型，用平台前缀选择上游 |
+| 智能路由 | 为多个模型设置别名，按顺序、轮询或延迟选路，并在请求开始前故障转移 |
+| 自定义服务 | 填写 Base URL 和 API Key，接入 OpenAI 兼容上游 |
+| 用量与诊断 | 查看 Token 消耗、模型分布、请求状态、耗时和上游错误 |
+| 自动任务 | 定时签到、刷新余额，并通过 Webhook 接收失败或低余额提醒 |
+| 备份恢复 | 导出加密的 `.ubak` 配置备份 |
 
-`8787`、`7864` 和 `18080` 作为兼容端口映射到同一个服务。默认仅监听本机 `127.0.0.1`。
+### 平台与模型前缀
 
-## 快速启动
+| 平台 | 添加方式 | 模型前缀 |
+|---|---|---|
+| TRAE | 网页登录或导入凭据 | `trae/` |
+| CodeBuddy 国内 | 网页登录或导入凭据 | `codebuddy/` |
+| WorkBuddy AI 国际站 | 官方网页授权；支持多个账号 | `workbuddy/` |
+| MonkeyCode | Windows 登录助手或导入凭据 | `monkeycode/` |
+| 自定义服务 | Base URL + API Key | 自定前缀 |
+| 智能路由 | 在控制台选择目标模型 | `route/` |
+
+实际可用模型取决于账号权限和上游服务，以 `/v1/models` 返回结果为准。
+
+## 快速开始
+
+需要 Docker。Windows 建议使用 Docker Desktop；Linux 和 macOS 使用 Docker Compose。
 
 ### Windows
-
-需要 Windows 10/11 x64 和 Docker Desktop。
 
 ```powershell
 git clone https://github.com/Rycar1/unified2api.git
@@ -45,61 +78,33 @@ cd unified2api
 .\setup.ps1
 ```
 
-脚本会生成随机管理密钥和客户端密钥，构建镜像并启动服务。生成的密钥保存在本机 `.env`，该文件已被 Git 忽略。
+`setup.ps1` 会生成管理密钥与客户端 API 密钥，构建镜像并启动服务。
 
 ### Linux / macOS
 
 ```bash
+git clone https://github.com/Rycar1/unified2api.git
+cd unified2api
 cp .env.example .env
-# 编辑 .env，替换其中的占位值
+# 编辑 .env，设置随机的 ADMIN_KEY 和 UNIFIED_API_KEY
 docker compose up -d --build
 ```
 
-`ADMIN_KEY` 建议使用至少 20 个随机字符。`UNIFIED_API_KEY` 是客户端请求统一 API 时使用的 Bearer Token。
+打开 **[管理控制台](http://localhost:8080/admin/)**，使用 `.env` 中的 `ADMIN_KEY` 登录。客户端使用 `UNIFIED_API_KEY` 调用 API。
 
-## 添加账号
+| 地址 | 用途 |
+|---|---|
+| `http://localhost:8080/admin/` | 管理控制台 |
+| `http://localhost:8080/v1` | API Base URL |
+| `http://localhost:8080/healthz` | 健康检查 |
 
-打开管理控制台，使用 `.env` 中的 `ADMIN_KEY` 登录。
+默认只绑定本机 `127.0.0.1`；`8787`、`7864`、`18080` 是兼容端口，指向同一个服务。
 
-账号页面的“全部签到”会依次处理三个平台中的所有启用账号。已经签到的账号不会重复领取；单个账号失败不会中断其他账号，完成后会汇总成功和失败数量并刷新额度。每行也可以单独签到、刷新账号或查询余额；查询后的额度会更新到表格，零余额显示为 0，未查询的余额显示为 —。
+## 添加账号与调用模型
 
-### TRAE / CodeBuddy
+在控制台的「账号」页选择平台并完成登录。TRAE 与 CodeBuddy 可以导入平台支持的凭据；MonkeyCode 可下载 Windows 登录助手。WorkBuddy AI 国际站使用官方网页授权，账号保存在独立的 Docker 数据卷中，无需启动桌面端。
 
-选择对应平台后，可以通过网页登录或导入该平台支持的凭据文件添加账号。网页登录过程在平台官方页面完成。
-
-CodeBuddy 的 `deepseek-v4.1-flash` 在客户端未指定推理强度时默认使用 `reasoning_effort: high`。客户端显式传入 `reasoning_effort` 时以客户端设置为准。
-
-### MonkeyCode
-
-Windows 用户可以从控制台下载登录助手。登录助手会打开独立浏览器会话，在官网登录完成后将本次授权提交给本机服务。
-
-也可以手动导入 Cookie 或 JSON。请勿把 Cookie、会话 ID 或导出的凭据提交到 GitHub。
-
-模型目录使用平台返回的模型名称，例如 `monkeycode/minimax-m2.5`，调用时自动映射为平台内部 ID。实际可选模型以 `/v1/models` 为准。
-
-MonkeyCode 使用平台任务执行对话。账号如果已有正在运行的官网任务，可能受到并发限制；调用测试会显示平台返回的具体原因。
-
-### 自定义服务
-
-填写服务名称、模型前缀、OpenAI 兼容 Base URL、上游 API Key 和模型列表。
-
-假设服务前缀是 `myapi`，上游模型为 `org/model`，客户端调用时使用：
-
-```json
-{
-  "model": "myapi/org/model"
-}
-```
-
-上游 API Key 只保存在服务端，管理接口不会回显完整 Key。
-
-### WorkBuddy AI 国外站（本地）
-
-运行 `setup.ps1` 后，在「账号」→「添加账号」→「WorkBuddy AI 国外」点击「打开登录页面」，在官方国际站完成授权。可以重复登录添加多个账号；账号会保存在独立的 Docker 数据卷中，并由国际站账号池轮换使用，不需要启动 WorkBuddy AI 桌面端。国外站账号与国内 CodeBuddy 账号分开显示，客户端使用 `workbuddy/模型名` 调用。账号池只在 Docker 内部网络开放，凭据不会返回给浏览器。
-
-国际站登录和中转基于 [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)（MIT License），源码及许可证保留在 `vendor/workbuddy2api-hub`。旧版手工配置的 `workboddy-proxy` 连接仍可继续使用；新网页登录使用独立的 `hub` 接入方式。备份和迁移时需要同时保留 `hub-accounts` Docker 数据卷。
-
-## API 示例
+新建客户端密钥后，可以用任何支持 OpenAI Chat Completions 的客户端连接：
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
@@ -112,53 +117,62 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-读取实际可用模型：
+先查询当前可用模型，替换示例中的 `MODEL_NAME`：
 
 ```bash
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer YOUR_UNIFIED_API_KEY"
 ```
 
-## 智能路由
+### 自定义服务与智能路由
 
-在控制台“智能路由”页面创建路由，选择多个实际模型及策略。创建前缀为 `code-stable` 的路由后，客户端使用：
+自定义服务需要服务前缀、Base URL、上游 API Key 和模型列表。例如前缀为 `myapi`，上游模型为 `org/model`，调用时使用 `myapi/org/model`。
 
-```json
-{
-  "model": "route/code-stable"
-}
-```
+智能路由把多个模型放在一个稳定别名下。例如创建 `code-stable` 路由后，客户端调用 `route/code-stable`。可选择顺序优先、轮询或低延迟策略；上游在开始响应前失败时，会按配置尝试下一个目标。
 
-支持按顺序优先、轮询和低延迟三种策略。上游在响应开始前返回认证、额度、限流或服务错误时，网关会自动尝试下一个目标；失败目标按设置进入冷却。流式请求在首个有效事件到达后立即转发。
-
-![image.png](.\images\PixPin_2026-09-27_22-37-57.png)
-## 调用记录与自动任务
-
-调用记录使用 SQLite 保存 90 天，仅记录模型、实际路由目标、HTTP 状态、耗时及 Token 数量，不保存提示词、回复正文或 API Key。
-![image.png](.\images\PixPin_2026-09-27_22-38-13.png)
-自动任务支持每日签到和每 5–1440 分钟刷新账号状态与余额。可配置 Webhook，在任务失败或余额低于阈值时发送不含凭据的 JSON 通知。
-![image.png](.\images\PixPin_2026-09-27_22-38-17.png)
-## 加密备份恢复
-
-控制台可以导出 `.ubak` 文件，其中包含三个平台账号、自定义服务、智能路由及自动任务设置。备份使用 PBKDF2-HMAC-SHA256 派生密钥并通过 AES-GCM 加密，密码不会保存到服务器。恢复成功后 Docker 容器自动重启并重新加载全部数据。
-
-## 协议支持
+### 协议支持
 
 | 模型前缀 | Chat Completions | Responses | Messages |
-|---|---:|---:|---:|
-| `trae/` | 支持 | — | — |
-| `codebuddy/` | 支持 | 支持 | 支持 |
+|---|:---:|:---:|:---:|
+| `trae/` | ✓ | — | — |
+| `codebuddy/` | ✓ | ✓ | ✓ |
+| `workbuddy/` | ✓ | ✓ | — |
 | `monkeycode/` | 文本对话 | — | — |
-| 自定义前缀 | 透传 | 透传 | — |
-| `route/` | 按目标能力 | 按目标能力 | 按目标能力 |
+| 自定义前缀 | 视上游而定 | 视上游而定 | — |
+| `route/` | 视目标而定 | 视目标而定 | 视目标而定 |
 
-模型能力和可用性取决于账号权限、剩余额度和上游服务。
+CodeBuddy 的 `deepseek-v4.1-flash` 在客户端未设置推理强度时默认使用 `reasoning_effort: high`；显式设置会覆盖默认值。
 
-控制台“调用测试”在失败时显示 HTTP 状态码及上游错误详情，并过滤凭据字段。自定义服务的 JSON 和文本错误也会保留诊断信息。
+## 统计、自动任务与备份
 
-## 前端开发
+调用记录保存模型、实际路由目标、HTTP 状态、耗时和 Token 数量，**不保存提示词或回复正文**。控制台展示按日、按周和累计用量；早于启用记录功能的请求无法回填。
 
-控制台源码位于 `ui/`，使用 React、Vite 和 Lucide。构建结果写入 `unified/static/`，运行服务时不需要安装 Node.js。
+自动任务支持每日签到及按间隔刷新账号状态和余额。Webhook 通知不包含凭据。单个账号签到或查询失败不会中断其他账号；调用测试会显示已过滤敏感信息的上游错误。
+
+控制台导出的 `.ubak` 文件使用密码派生密钥与 AES-GCM 加密，可恢复内置账号和配置。**WorkBuddy 国际站账号位于独立数据卷，迁移时还需单独保留该数据卷。**
+
+| Docker 数据卷 | 内容 |
+|---|---|
+| `unified2api_trae-auth` | TRAE 凭据 |
+| `unified2api_trae-data` | TRAE 账号池状态 |
+| `unified2api_buddy-data` | CodeBuddy、MonkeyCode、路由、记录和客户端密钥 |
+| `unified2api_hub-accounts` | WorkBuddy 国际站账号 |
+| `unified2api_hub-usage` | WorkBuddy 国际站账号池用量 |
+
+停止服务时不要使用 `docker compose down -v`，该命令会删除数据卷。
+
+## 安全与部署
+
+- `.env`、Cookie、账号导出文件和真实 API Key 不应提交到 GitHub。
+- 管理会话使用 HttpOnly Cookie，写操作需要 CSRF Token；上游 Key 不会在管理列表中明文回显。
+- WorkBuddy 国际站账号池只在 Docker 内部网络运行，不向公网暴露端口。
+- 对外部署时使用 HTTPS、设置 `SECURE_COOKIE=true`，并限制管理端的访问来源。
+
+本项目用于个人账号与本地服务管理。请遵守对应平台的服务条款。
+
+## 开发与维护
+
+控制台源码位于 `ui/`，使用 React、Vite 和 Lucide；构建结果写入 `unified/static/`。运行已构建的服务不需要 Node.js。
 
 ```bash
 cd ui
@@ -166,62 +180,20 @@ pnpm install
 pnpm run build
 ```
 
-## 项目结构
-
-```text
-unified2api/
-├─ unified/       # FastAPI 统一后端、路由和控制台静态文件
-├─ ui/            # React 控制台源码
-├─ native/        # TRAE 与 MonkeyCode 原生桥接
-├─ vendor/        # 上游项目源码快照及许可证
-├─ login-helper/  # MonkeyCode Windows 登录助手源码
-├─ tests/         # 后端和连接测试
-├─ Dockerfile
-└─ compose.yaml
-```
-
-## 数据保存
-
-Docker 使用以下命名卷保存数据：
-
-| 数据卷 | 内容 |
-|---|---|
-| `unified2api_trae-auth` | TRAE 凭据 |
-| `unified2api_trae-data` | TRAE 账号池状态 |
-| `unified2api_buddy-data` | CodeBuddy、MonkeyCode、自定义服务和客户端密钥 |
-
-停止服务时不要使用 `docker compose down -v`，否则会删除这些数据卷。
-
-## 安全说明
-
-- 不要提交 `.env`、Cookie、账号导出文件或真实 API Key。
-- 管理会话使用 HttpOnly Cookie，写操作需要 CSRF Token。
-- 默认配置仅适合本机使用。
-- 对外部署时应配置 HTTPS、设置 `SECURE_COOKIE=true`，并限制管理端访问来源。
-- 登录助手每次使用独立临时浏览器会话，不应读取日常浏览器配置目录。
-
-## 常用维护命令
+查看服务状态：
 
 ```bash
 docker compose ps
 docker compose logs --tail 100
-docker compose down
-```
-
-运行测试：
-
-```bash
-docker run --rm \
-  --mount "type=bind,source=$(pwd)/tests,target=/app/tests,readonly" \
-  unified2api-app python -m unittest discover -s tests -v
 ```
 
 ## 上游项目
 
-本项目整合并保留以下项目的源码快照与许可证：
+本仓库整合并保留以下项目的源码快照与许可证：
 
 - [JeffHu0912/trae2api](https://github.com/JeffHu0912/trae2api)
 - [ShouZhuo0413/codebuddy2api](https://github.com/ShouZhuo0413/codebuddy2api)
 - [ZFXing-lite/monkeycode2api](https://github.com/ZFXing-lite/monkeycode2api)
+- [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)
 
-各上游组件继续适用其原许可证，详见 `vendor/` 中的许可证文件。
+各组件继续适用其原许可证，详见 `vendor/`。
