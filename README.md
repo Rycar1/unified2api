@@ -22,7 +22,7 @@
 - Windows MonkeyCode 登录助手
 - React 响应式管理界面
 
-![image.png](images\PixPin_2026-09-27_22-37-42.png)
+![image.png](.\images\PixPin_2026-09-27_22-37-42.png)
 ## 页面与端口
 
 | 用途 | 默认地址 |
@@ -131,13 +131,13 @@ curl http://localhost:8080/v1/models \
 
 支持按顺序优先、轮询和低延迟三种策略。上游在响应开始前返回认证、额度、限流或服务错误时，网关会自动尝试下一个目标；失败目标按设置进入冷却。流式请求在首个有效事件到达后立即转发。
 
-![image.png](images\PixPin_2026-09-27_22-37-57.png)
+![image.png](.\images\PixPin_2026-09-27_22-37-57.png)
 ## 调用记录与自动任务
 
 调用记录使用 SQLite 保存 90 天，仅记录模型、实际路由目标、HTTP 状态、耗时及 Token 数量，不保存提示词、回复正文或 API Key。
-![image.png](images\PixPin_2026-09-27_22-38-13.png)
+![image.png](.\images\PixPin_2026-09-27_22-38-13.png)
 自动任务支持每日签到和每 5–1440 分钟刷新账号状态与余额。可配置 Webhook，在任务失败或余额低于阈值时发送不含凭据的 JSON 通知。
-![image.png](images\PixPin_2026-09-27_22-38-17.png)
+![image.png](.\images\PixPin_2026-09-27_22-38-17.png)
 ## 加密备份恢复
 
 控制台可以导出 `.ubak` 文件，其中包含三个平台账号、自定义服务、智能路由及自动任务设置。备份使用 PBKDF2-HMAC-SHA256 派生密钥并通过 AES-GCM 加密，密码不会保存到服务器。恢复成功后 Docker 容器自动重启并重新加载全部数据。
