@@ -70,23 +70,99 @@ class WorkBuddyLogin:
             raise HTTPException(404, "登录会话不存在")
         return flow
 
-    async def save_hub(self, name):
-        existing = next((row for row in self.connections.rows()
-                         if row.get("kind") == "workbuddy_intl" and row.get("adapter") == "hub"), None)
-        if not existing:
-            existing = next((row for row in self.connections.rows()
-                             if row.get("kind") == "workbuddy_intl"), None)
-        cid = existing["id"] if existing else next(
-            (candidate for candidate in ["workbuddy", *(f"workbuddy{n}" for n in range(2, 100))]
-             if candidate not in self.connections.data), None)
-        if not cid:
-            raise HTTPException(409, "WorkBuddy 服务标识已用尽")
-        body = {"id": cid, "name": name or "WorkBuddy AI 国外", "kind": "workbuddy_intl",
-                "adapter": "hub", "base_url": self.hub_url + "/v1", "key": self.api_key,
-                "models": [], "enabled": True}
-        body["models"] = (await self.connections.discover(body))["models"]
-        self.connections.save(body, cid if existing else None)
-        return {"state": "success", "message": "WorkBuddy AI 国外账号已添加"}
+    async def accounts(self):
+        result = await self.hub("GET", "/accounts?realm=intl")
+        rows = result.get("accounts")
+        if not isinstance(rows, list):
+            raise HTTPException(502, "WorkBuddy 账号池返回了无效的账号列表")
+        return [a for a in rows if isinstance(a, dict) and a.get("realm") == "intl"
+                and isinstance(a.get("uid"), str) and a["uid"]]
+
+    async def public_accounts(self):
+        rows = []
+        for account in await self.accounts():
+            credits = account.get("credits")
+            remaining = credits.get("remain") if isinstance(credits, dict) else None
+            expiry = account.get("expiresAt")
+            rows.append({"id": account["uid"], "uid": account["uid"], "provider": "workbuddy_intl",
+                         "name": account.get("nickname") or account["uid"], "enabled": account.get("enabled", False),
+                         "status": "paused" if not account.get("enabled") else "cooling" if account.get("inCooldown") else "ready",
+                         "remaining": remaining if isinstance(remaining, (int, float)) else None,
+                         "expires_at": expiry * 1000 if isinstance(expiry, (int, float)) and expiry < 100000000000 else expiry or 0,
+                         "last_error": account.get("lastError") or ""})
+        return rows
+
+    async def models(self):
+        if not any(a.get("enabled") for a in await self.accounts()):
+            return []
+        data = await self.hub("GET", "/v1/models?realm=intl")
+        items = data.get("data")
+        if not isinstance(items, list):
+            raise HTTPException(502, "WorkBuddy 模型列表格式无效")
+        return [{"id": "workbuddy/" + item["id"], "object": "model", "owned_by": "workbuddy",
+                 "provider_name": "WorkBuddy AI 国外"}
+                for item in items if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
+
+    async def relay(self, path, body, scope, receive, send):
+        if not any(a.get("enabled") for a in await self.accounts()):
+            raise HTTPException(503, "WorkBuddy 国际站没有已启用账号")
+        row = {"id": "workbuddy", "kind": "workbuddy_intl", "adapter": "hub",
+               "base_url": self.hub_url + "/v1", "key": self.api_key, "enabled": True}
+        return await self.connections.relay_row(row, path, body, scope, receive, send)
+
+    async def account(self, aid):
+        account = next((a for a in await self.accounts() if a["uid"] == aid), None)
+        if not account:
+            raise HTTPException(404, "WorkBuddy 国际站账号不存在")
+        return account
+
+    async def operate(self, aid, action, account=None):
+        account = account or await self.account(aid)
+        if action == "checkin" and str(account.get("lastDailyChat") or "").startswith(time.strftime("%Y-%m-%d")):
+            credits = account.get("credits")
+            remaining = credits.get("remain") if isinstance(credits, dict) else None
+            return {"ok": True, "id": aid, "message": "今日已完成每日活跃",
+                    "remaining": remaining if isinstance(remaining, (int, float)) else None}
+        endpoint = {"refresh": "/accounts/refresh", "balance": "/accounts/credits/fetch",
+                    "checkin": "/accounts/daily-chat"}[action]
+        data = await self.hub("POST", endpoint, body={"uid": aid})
+        result = next((r for r in data.get("results", []) if r.get("uid") == aid), None)
+        if not result:
+            raise HTTPException(502, "WorkBuddy 未返回该账号的操作结果")
+        if result.get("ok") is not True:
+            raise HTTPException(502, safe_error_message(result.get("error") or result.get("msg") or "账号操作失败", 502))
+        account = await self.account(aid)
+        credits = account.get("credits")
+        remaining = credits.get("remain") if isinstance(credits, dict) else None
+        return {"ok": True, "id": aid, "message": result.get("msg") or "账号已更新",
+                "remaining": remaining if isinstance(remaining, (int, float)) else None}
+
+    async def daily_active_all(self):
+        accounts = [account for account in await self.accounts() if account.get("enabled")]
+        limit = asyncio.Semaphore(3)
+
+        async def activate(account):
+            async with limit:
+                try:
+                    return await self.operate(account["uid"], "checkin", account)
+                except HTTPException as exc:
+                    return {"id": account["uid"], "ok": False, "message": str(exc.detail)}
+
+        return await asyncio.gather(*(activate(account) for account in accounts))
+
+    async def edit_account(self, aid, req, body_json):
+        self.store.require_admin(req)
+        await self.account(aid)
+        if req.method == "DELETE":
+            result = await self.hub("POST", "/accounts/delete", body={"uid": aid})
+            if not result.get("deleted"):
+                raise HTTPException(502, "WorkBuddy 未删除该账号")
+            return {"ok": True}
+        body = await body_json(req)
+        if type(body.get("enabled")) is not bool:
+            raise HTTPException(400, "启用状态必须为布尔值")
+        await self.hub("POST", "/accounts/set", body={"uid": aid, "enabled": body["enabled"]})
+        return {"ok": True}
 
     async def start(self, req, name):
         self.store.require_admin(req)
@@ -122,10 +198,7 @@ class WorkBuddyLogin:
             result = await self.hub("GET", "/accounts/login/poll?state=" + flow["hub_state"])
             state = result.get("status")
             if state == "ok":
-                try:
-                    flow.update(await self.save_hub(flow["name"]))
-                except (HTTPException, ValueError) as exc:
-                    flow.update(state="failed", message=str(getattr(exc, "detail", exc))[:300])
+                flow.update(state="success", message="WorkBuddy AI 国外账号已添加")
             elif state in {"error", "expired", "unknown"}:
                 flow.update(state="expired" if state in {"expired", "unknown"} else "failed",
                             message=str(result.get("message") or "授权失败")[:300])
@@ -135,10 +208,9 @@ class WorkBuddyLogin:
         self.store.require_admin(req)
         if not isinstance(name, str) or len(name) > 60:
             raise HTTPException(400, "账号备注不能超过 60 个字符")
-        result = await self.hub("GET", "/accounts?realm=intl")
-        if not result.get("accounts"):
+        if not await self.accounts():
             raise HTTPException(404, "WorkBuddy 账号池中没有国际站账号，请先网页登录")
-        return await self.save_hub(name.strip())
+        return {"state": "success", "message": "WorkBuddy AI 国外账号已就绪"}
 
     async def cancel(self, fid, req):
         flow = self.owner(fid, req)
@@ -150,6 +222,17 @@ class WorkBuddyLogin:
         return {"ok": True}
 
     def register(self, app, body_json):
+        @app.api_route("/admin/api/unified/workbuddy_intl/accounts/{aid}", methods=["PATCH", "DELETE"])
+        async def edit_account(aid: str, req: Request):
+            return await self.edit_account(aid, req, body_json)
+
+        @app.post("/admin/api/unified/workbuddy_intl/accounts/{aid}/{action}")
+        async def operate(aid: str, action: str, req: Request):
+            self.store.require_admin(req)
+            if action not in {"refresh", "balance", "checkin"}:
+                raise HTTPException(404, "不支持的账号操作")
+            return await self.operate(aid, action)
+
         @app.post("/admin/api/unified/workbuddy/login")
         async def start(req: Request):
             return await self.start(req, (await body_json(req)).get("name", ""))

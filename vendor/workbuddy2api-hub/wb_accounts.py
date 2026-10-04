@@ -224,6 +224,8 @@ class Account(object):
         # minted token can be overwritten by a stale snapshot.
         self._refresh_lock = threading.Lock()
         self._save_lock = threading.Lock()
+        # The hub scheduler and Unified check-in may run at the same time.
+        self._daily_chat_lock = threading.Lock()
         # The dashboard snapshots this state while request threads update it.
         # Keep it separate from _refresh_lock, which spans network requests.
         self._throttle_lock = threading.Lock()
@@ -524,6 +526,12 @@ class Account(object):
         """国际版每日活跃对话（满足官方客户端每日对话送 30/50 积分活跃奖励规则）。"""
         if self.realm != "intl":
             return {"ok": False, "error": "daily chat is only for international accounts"}
+        with self._daily_chat_lock:
+            if not self.can_daily_chat():
+                return {"ok": True, "msg": "今日已完成每日活跃", "already": True}
+            return self._daily_chat_once()
+
+    def _daily_chat_once(self):
         import wb_proxy
         url = self.chat_base_url() + wb_proxy.CHAT_PATH
         headers = self.headers("chat")

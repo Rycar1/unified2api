@@ -30,7 +30,11 @@ const navGroups = [
   { label: '运维', items: [['usage', Activity], ['logs', FileText], ['automation', Clock], ['backup', Archive]] },
 ]
 
-const providerName = id => ({ trae: 'TRAE', codebuddy: 'CodeBuddy 国内', workbuddy_intl: 'WorkBuddy AI 国外', monkeycode: 'MonkeyCode', route: '智能路由' }[id] || id)
+const accountProviders = [['trae','TRAE'],['codebuddy','CodeBuddy 国内'],['workbuddy_intl','WorkBuddy AI 国外'],['monkeycode','MonkeyCode'],['qoder','Qoder']]
+const providerName = id => ({ ...Object.fromEntries(accountProviders), qoder: 'Qoder 国际', qoder_cn: 'Qoder 国内', workbuddy: 'WorkBuddy AI 国外', route: '智能路由' }[id] || id)
+const accountFilter = a => a.provider === 'qoder' ? (a.region === 'cn' ? 'qoder_cn' : 'qoder_global') : a.provider
+const accountPlatform = a => a.provider === 'qoder' ? (a.region === 'cn' ? 'Qoder 国内' : 'Qoder 国际') : providerName(a.provider)
+const accountFilters = [...accountProviders.filter(([id]) => id !== 'qoder'), ['qoder_cn', 'Qoder 国内'], ['qoder_global', 'Qoder 国际']]
 const statusName = value => ({ ready: '可用', available: '可用', paused: '已暂停', cooling: '冷却中', invalid: '凭据异常', exhausted: '额度耗尽', expired: '已过期', error: '异常' }[value] || value || '可用')
 
 async function request(path, { method = 'GET', body, csrf = '' } = {}) {
@@ -98,10 +102,11 @@ function Modal({ title, subtitle, onClose, children }) {
   </div>
 }
 
-function AccountDialog({ csrf, initialProvider = 'trae', onClose, onSaved }) {
-  const [provider, setProvider] = useState(initialProvider)
+function AccountDialog({ csrf, onClose, onSaved }) {
+  const [provider, setProvider] = useState('trae')
   const [mode, setMode] = useState('web')
   const [name, setName] = useState('')
+  const [qoderRegion, setQoderRegion] = useState('global')
   const [credential, setCredential] = useState('')
   const [flow, setFlow] = useState(null)
   const [status, setStatus] = useState('')
@@ -119,6 +124,7 @@ function AccountDialog({ csrf, initialProvider = 'trae', onClose, onSaved }) {
         if (flow.provider === 'codebuddy') result = await request(`oauth/${flow.id}/poll`, { method: 'POST', body: {}, csrf })
         if (flow.provider === 'monkeycode') result = await request(`unified/monkeycode/login/${flow.id}`)
         if (flow.provider === 'workbuddy_intl') result = await request(`unified/workbuddy/login/${flow.id}`)
+        if (flow.provider === 'qoder') result = await request(`unified/qoder/login/${flow.id}`)
         if (stopped) return
         const state = result.state || result.status
         if (state === 'success') { setStatus('登录成功，账号已经保存'); await onSaved(); return }
@@ -135,7 +141,7 @@ function AccountDialog({ csrf, initialProvider = 'trae', onClose, onSaved }) {
 
   async function cancelFlow() {
     if (!flow) return
-    const path = flow.provider === 'trae' ? `unified/trae/login/${flow.id}` : flow.provider === 'codebuddy' ? `oauth/${flow.id}` : flow.provider === 'workbuddy_intl' ? `unified/workbuddy/login/${flow.id}` : `unified/monkeycode/login/${flow.id}`
+    const path = flow.provider === 'codebuddy' ? `oauth/${flow.id}` : `unified/${flow.provider === 'workbuddy_intl' ? 'workbuddy' : flow.provider}/login/${flow.id}`
     try { await request(path, { method: 'DELETE', body: {}, csrf }) } catch { /* completed or expired */ }
     setFlow(null)
   }
@@ -150,6 +156,7 @@ function AccountDialog({ csrf, initialProvider = 'trae', onClose, onSaved }) {
       if (provider === 'codebuddy') result = await request('oauth/start', { method: 'POST', body: { name: name.trim() || undefined }, csrf })
       if (provider === 'monkeycode') result = await request('unified/monkeycode/login', { method: 'POST', body: { name: name.trim() }, csrf })
       if (provider === 'workbuddy_intl') result = await request('unified/workbuddy/login', { method: 'POST', body: { name: name.trim() }, csrf })
+      if (provider === 'qoder') result = await request('unified/qoder/login', { method: 'POST', body: { name: name.trim(), region: qoderRegion }, csrf })
       const next = { provider, id: result.pending_id || result.id, url: result.login_url || result.url || result.launch_url }
       setFlow(next); setStatus('登录页面已打开，请完成官方登录')
       if (provider === 'monkeycode') {
@@ -158,26 +165,21 @@ function AccountDialog({ csrf, initialProvider = 'trae', onClose, onSaved }) {
       else popup?.close()
     } catch (err) { popup?.close(); setError(err.message); setStatus('') } finally { setBusy(false) }
   }
-  async function importWorkBuddy() {
-    setBusy(true); setError(''); setStatus('正在检查 WorkBuddy 国际站账号池…')
-    try {
-      await request('unified/workbuddy/import', { method: 'POST', body: { name: name.trim() }, csrf })
-      setStatus('WorkBuddy AI 国外账号已连接')
-      await onSaved()
-    } catch (err) { setError(err.message); setStatus('') } finally { setBusy(false) }
-  }
   async function importAccount(event) {
     event.preventDefault(); setBusy(true); setError('')
     try {
       let body = { name: name.trim() }
+      if (provider === 'qoder') body.region = qoderRegion
       if (provider === 'monkeycode') {
         const value = credential.trim()
         if (value.startsWith('{')) body.credential = JSON.parse(value)
         else body.cookie = value
+      } else if (provider === 'qoder' && credential.trim().startsWith('pt-')) {
+        body.credential = credential.trim()
       } else {
         body.credential = JSON.parse(credential)
       }
-      const path = provider === 'trae' ? 'unified/trae/accounts' : provider === 'codebuddy' ? 'accounts' : 'unified/monkeycode/accounts'
+      const path = provider === 'codebuddy' ? 'accounts' : `unified/${provider}/accounts`
       await request(path, { method: 'POST', body, csrf })
       await onSaved()
     } catch (err) { setError(err instanceof SyntaxError ? '请输入有效的 JSON 凭据' : err.message) } finally { setBusy(false) }
@@ -191,32 +193,34 @@ function AccountDialog({ csrf, initialProvider = 'trae', onClose, onSaved }) {
   function changeProvider(next) { cancelFlow(); setProvider(next); setMode('web'); setStatus(''); setError(''); setCredential('') }
 
   return <Modal title="添加账号" subtitle="连接平台" onClose={close}>
-    <div className="choice-grid">{[['trae','TRAE'],['codebuddy','CodeBuddy 国内'],['workbuddy_intl','WorkBuddy AI 国外'],['monkeycode','MonkeyCode']].map(([id,label]) => <button key={id} className={provider === id ? 'active' : ''} onClick={() => changeProvider(id)}>{label}{provider === id && <Check size={14}/>}</button>)}</div>
-    <label>账号备注（可选）</label><input value={name} onChange={e => setName(e.target.value)} maxLength="60" placeholder="例如：日常账号"/>
+    <div className="choice-grid">{accountProviders.map(([id,label]) => <button key={id} className={provider === id ? 'active' : ''} onClick={() => changeProvider(id)}>{label}{provider === id && <Check size={14}/>}</button>)}</div>
+    {provider === 'qoder' && <><label htmlFor="qoder-region">Qoder 站点</label><select id="qoder-region" value={qoderRegion} onChange={e => setQoderRegion(e.target.value)} disabled={Boolean(flow)}><option value="global">国际版</option><option value="cn">国内版</option></select></>}
+    {provider !== 'workbuddy_intl' && <><label>账号备注（可选）</label><input value={name} onChange={e => setName(e.target.value)} maxLength="60" placeholder="例如：日常账号"/></>}
     {provider !== 'workbuddy_intl' && <div className="mode-tabs"><button className={mode === 'web' ? 'active' : ''} onClick={() => setMode('web')}>网页登录</button><button className={mode === 'import' ? 'active' : ''} onClick={() => setMode('import')}>导入凭据</button></div>}
     {mode === 'web' ? <div className="login-flow">
       <p>{provider === 'monkeycode' ? '通过本机登录助手打开独立窗口，完成登录后自动保存。' : provider === 'workbuddy_intl' ? '在 WorkBuddy AI 国际站官方页面完成授权。账号会加入独立账号池，支持添加多个账号；无需打开桌面端。' : '在平台官方页面完成登录，控制台会自动保存账号。'}</p>
+      {provider === 'qoder' && <p className="field-help">选择 Qoder 账号完成授权后会自动添加。可以多次登录添加不同账号，调用时由账号池轮换。</p>}
       <button className="button primary wide" onClick={startLogin} disabled={busy || Boolean(flow)}><ExternalLink size={15}/>{busy ? '正在准备…' : flow ? '等待登录完成…' : '打开登录页面'}</button>
-      {provider === 'workbuddy_intl' && <button className="button secondary wide" onClick={importWorkBuddy} disabled={busy || Boolean(flow)}><Check size={15}/>连接账号池中已有账号</button>}
       {provider === 'workbuddy_intl' && <p className="field-help">首次使用请打开登录页面。再次登录可以继续添加账号，由账号池自动轮换调用。</p>}
-      {flow?.url && <a className="button secondary wide" href={flow.url}>再次打开登录页面</a>}
+      {flow?.url && <a className="button secondary wide" href={flow.url} target="_blank" rel="noopener noreferrer">再次打开登录页面</a>}
       {provider === 'monkeycode' && <a className="helper-download" href="/admin/downloads/monkey-login-helper.zip" download>首次使用：下载 Windows 登录助手</a>}
       {status && <p className="flow-status">{status}</p>}
     </div> : <form onSubmit={importAccount}>
       <label>凭据文件</label><input type="file" accept=".json,.info,.txt" onChange={loadFile}/>
-      <label>{provider === 'monkeycode' ? 'Cookie 或 JSON' : 'JSON 凭据'}</label><textarea value={credential} onChange={e => setCredential(e.target.value)} rows="7" required placeholder={provider === 'monkeycode' ? 'monkeycode_ai_session=…' : '{ "auth": { … }, "account": { … } }'}/>
+      <label>{provider === 'monkeycode' ? 'Cookie 或 JSON' : provider === 'qoder' ? 'PAT 或 JSON 凭据' : 'JSON 凭据'}</label><textarea value={credential} onChange={e => setCredential(e.target.value)} rows="7" required placeholder={provider === 'monkeycode' ? 'monkeycode_ai_session=…' : provider === 'qoder' ? 'pt-… 或 { "uid": "…", "accessToken": "…", "refreshToken": "…" }' : '{ "auth": { … }, "account": { … } }'}/>
+      {provider === 'qoder' && <p className="field-help">在所选站点的「设置 → 个人访问令牌」创建 PAT 后粘贴；也可导入旧版 JSON 凭据。</p>}
       <button className="button primary wide" disabled={busy}>{busy ? '正在校验…' : '导入并添加'}</button>
     </form>}
     {error && <p className="form-error">{error}</p>}
   </Modal>
 }
 
-function ConnectionDialog({ csrf, initialConnection, defaultKind = 'openai', onClose, onSaved }) {
+function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
   const [form, setForm] = useState(() => initialConnection ? {
     name: initialConnection.name, id: initialConnection.id, base_url: initialConnection.base_url,
     key: '', models: (initialConnection.models || []).join('\n'), enabled: initialConnection.enabled !== false,
     kind: initialConnection.kind || 'openai',
-  } : { name: defaultKind === 'workbuddy_intl' ? 'WorkBuddy AI 国外' : '', id: defaultKind === 'workbuddy_intl' ? 'workbuddy' : '', base_url: '', key: '', models: '', enabled: true, kind: defaultKind })
+  } : { name: '', id: '', base_url: '', key: '', models: '', enabled: true, kind: 'openai' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const update = (key, value) => setForm(current => ({ ...current, [key]: value }))
@@ -237,14 +241,13 @@ function ConnectionDialog({ csrf, initialConnection, defaultKind = 'openai', onC
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
   return <Modal title={initialConnection ? '编辑服务' : '添加服务'} subtitle="OpenAI 兼容接口" onClose={onClose}><form onSubmit={save}>
-    <label>服务类型</label><select value={form.kind} onChange={e => update('kind', e.target.value)}><option value="openai">通用 OpenAI 接口</option><option value="workbuddy_intl">WorkBuddy AI 国际站</option></select>
-    {form.kind === 'workbuddy_intl' && <p className="field-help">推荐从账号页使用网页登录自动接入。这里可以编辑已有连接，或手动添加兼容国际站的中转。</p>}
+    <label>服务类型</label><select value={form.kind} onChange={e => update('kind', e.target.value)}><option value="openai">通用 OpenAI 接口</option>{initialConnection?.kind === 'workbuddy_intl' && <option value="workbuddy_intl">旧版 WorkBuddy 中转</option>}</select>
     <div className="field-grid"><div><label>服务名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：我的模型服务"/></div><div><label>模型前缀</label><input required readOnly={Boolean(initialConnection)} pattern="[a-z][a-z0-9_-]{0,39}" value={form.id} onChange={e => update('id', e.target.value)} placeholder="myapi"/></div></div>
     {initialConnection && <p className="field-help">模型前缀保持不变，现有客户端仍可使用 <code>{form.id}/</code>。</p>}
-    <label>Base URL</label><input type="url" required value={form.base_url} onChange={e => update('base_url', e.target.value)} placeholder={form.kind === 'workbuddy_intl' ? 'http://可从服务器访问的地址:8790/v1' : 'https://api.example.com/v1'}/>
+    <label>Base URL</label><input type="url" required value={form.base_url} onChange={e => update('base_url', e.target.value)} placeholder="https://api.example.com/v1"/>
     <label>API Key</label><input type="password" required={!initialConnection} value={form.key} onChange={e => update('key', e.target.value)} autoComplete="new-password" placeholder={initialConnection ? '留空则保持当前 Key' : '服务商提供的 Key'}/>
     <label>模型名称（每行一个）</label><textarea rows="5" value={form.models} onChange={e => update('models', e.target.value)} placeholder="model-name"/>
-    <button className="button secondary wide" type="button" onClick={discover} disabled={busy}>{form.kind === 'workbuddy_intl' ? '检测连接并读取国际站模型' : '读取模型列表'}</button>
+    <button className="button secondary wide" type="button" onClick={discover} disabled={busy}>读取模型列表</button>
     <label className="switch-row"><span><strong>启用服务</strong><small>停用后模型将从目录中隐藏</small></span><input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)}/></label>
     {error && <p className="form-error" role="alert">{error}</p>}
     <button className="button primary wide" disabled={busy}>{busy ? '正在保存…' : initialConnection ? '保存修改' : '保存服务'}</button>
@@ -404,7 +407,7 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback }) {
 
   const disabled = Boolean(busy) || account.enabled === false
   return <div className="account-actions">
-    <button className="mini-action" onClick={() => run('checkin')} disabled={disabled} title="签到并刷新额度"><Activity size={13}/><span>{busy === 'checkin' ? '签到中' : '签到'}</span></button>
+    <button className="mini-action" onClick={() => run('checkin')} disabled={disabled} title={account.provider === 'workbuddy_intl' ? '发送一条简短消息以保持国际站账号活跃' : '签到并刷新额度'}><Activity size={13}/><span>{busy === 'checkin' ? '执行中' : account.provider === 'workbuddy_intl' ? '每日活跃' : '签到'}</span></button>
     <button className="mini-action" onClick={() => run('refresh')} disabled={disabled} title="刷新凭据和额度"><RefreshCw size={13} className={busy === 'refresh' ? 'spin' : ''}/><span>{busy === 'refresh' ? '刷新中' : '刷新'}</span></button>
     <button className="mini-action" onClick={() => run('status')} disabled={disabled} title="查询最新余额"><WalletCards size={13}/><span>{busy === 'status' ? '查询中' : '余额'}</span></button>
     <button ref={moreButton} className={`dots-action ${more ? 'active' : ''}`} onClick={toggleMore} aria-label="更多账号操作" aria-expanded={more}>•••</button>
@@ -415,14 +418,13 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback }) {
   </div>
 }
 
-function Accounts({ data, csrf, onRefresh, onAdd, onAddWorkBuddy, onEditWorkBuddy }) {
+function Accounts({ data, csrf, onRefresh, onAdd }) {
   const [query, setQuery] = useState('')
   const [provider, setProvider] = useState('all')
   const [checkingIn, setCheckingIn] = useState(false)
   const [feedback, setFeedback] = useState(null)
-  const workbuddyConnections = (data?.connections || []).filter(item => item.kind === 'workbuddy_intl')
   const rows = useMemo(() => (data?.accounts || []).filter(account =>
-    (provider === 'all' || account.provider === provider) &&
+    (provider === 'all' || accountFilter(account) === provider) &&
     `${account.name || ''} ${account.nickname || ''} ${account.uid || ''}`.toLowerCase().includes(query.toLowerCase())
   ), [data, provider, query])
 
@@ -448,15 +450,13 @@ function Accounts({ data, csrf, onRefresh, onAdd, onAddWorkBuddy, onEditWorkBudd
   return <section className="content-card">
     <div className="section-head"><div><span className="section-label">账号池</span><h2>{data?.accounts?.length || 0} 个账号</h2></div><div className="head-actions"><button className="button secondary" onClick={checkinAll} disabled={checkingIn}><Activity size={15}/>{checkingIn ? '正在签到…' : '全部签到'}</button><button className="button primary" onClick={onAdd}><Plus size={15}/>添加账号</button></div></div>
     {feedback && !feedback.key && <div className={`result-banner ${feedback.error ? 'error' : ''}`} role="status">{feedback.message}</div>}
-    <div className="toolbar"><div className="filter-tabs">{[['all','全部'],['trae','TRAE'],['codebuddy','CodeBuddy 国内'],['workbuddy_intl','WorkBuddy AI 国外'],['monkeycode','MonkeyCode']].map(([id,label]) => <button key={id} className={provider === id ? 'active' : ''} onClick={() => setProvider(id)}>{label}</button>)}</div><label className="search-box"><Search size={15}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索账号" /></label></div>
-    {(provider === 'all' || provider === 'workbuddy_intl') && <div className="section-head"><div><h3>WorkBuddy AI 国外</h3><p className="muted">国际站独立账号池；与国内 CodeBuddy 分开。</p></div><button className="button secondary" onClick={onAddWorkBuddy}><Plus size={15}/>添加国外账号</button></div>}
-    {(provider === 'all' || provider === 'workbuddy_intl') && workbuddyConnections.filter(item => `${item.name} ${item.id}`.toLowerCase().includes(query.toLowerCase())).map(item => <div className="result-banner" key={item.id}><strong>{item.name}</strong> · <code>{item.id}/</code> · {item.models?.length || 0} 个模型 · {item.enabled ? '已启用' : '已停用'} <button className="button secondary" onClick={() => onEditWorkBuddy(item)}>编辑连接</button></div>)}
+    <div className="toolbar"><div className="filter-tabs">{[['all','全部'],...accountFilters].map(([id,label]) => <button key={id} className={provider === id ? 'active' : ''} onClick={() => setProvider(id)}>{label}</button>)}</div><label className="search-box"><Search size={15}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索账号" /></label></div>
     {<DataTable columns={['账号','平台','状态','额度','有效期','操作']} empty={!rows.length && '没有匹配的账号'}>{rows.map(account => {
       const key = `${account.provider}-${account.id}`
       const status = account.enabled === false ? 'paused' : account.pool_state || account.status || 'ready'
       const remaining = account.remaining
       return <React.Fragment key={key}>
-        <tr><td><strong>{account.name || account.nickname || account.uid}</strong><small>{account.uid || account.id}</small></td><td><span className="provider-badge">{providerName(account.provider)}</span></td><td><StatusBadge status={status}/></td><td className="tabular">{typeof remaining === 'number' ? remaining.toLocaleString() : '—'}</td><td><span className="muted">{account.expires_at ? new Date(account.expires_at).toLocaleDateString('zh-CN') : '未提供'}</span></td><td className="row-menu">{account.provider === 'workbuddy_intl' ? '—' : <AccountRowActions account={account} csrf={csrf} onRefresh={onRefresh} onFeedback={showFeedback}/>}</td></tr>
+        <tr><td><strong>{account.name || account.nickname || account.uid}</strong><small>{account.uid || account.id}</small></td><td><span className="provider-badge">{accountPlatform(account)}</span></td><td><StatusBadge status={status}/></td><td className="tabular">{typeof remaining === 'number' ? remaining.toLocaleString() : '—'}</td><td><span className="muted">{account.expires_at ? new Date(account.expires_at).toLocaleDateString('zh-CN') : '未提供'}</span></td><td className="row-menu"><AccountRowActions account={account} csrf={csrf} onRefresh={onRefresh} onFeedback={showFeedback}/></td></tr>
         {feedback?.key === key && <tr className={`account-feedback ${feedback.error ? 'error' : ''}`}><td colSpan="6">{feedback.message}</td></tr>}
       </React.Fragment>
     })}</DataTable>}
@@ -532,7 +532,7 @@ function ConnectionRowActions({ connection, csrf, onRefresh, onEdit, onFeedback 
 function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
   const [feedback, setFeedback] = useState(null)
   const rows = data?.connections || []
-  return <section className="content-card"><div className="section-head"><div><span className="section-label">自定义服务</span><h2>兼容 OpenAI 的接口</h2><p className="muted">使用 Base URL 与 API Key 接入其他服务，也可连接 WorkBuddy AI 国际站中转。</p></div><button className="button primary" onClick={onAdd}><Plus size={15}/>添加服务</button></div>
+  return <section className="content-card"><div className="section-head"><div><span className="section-label">自定义服务</span><h2>兼容 OpenAI 的接口</h2><p className="muted">使用 Base URL 与 API Key 接入其他服务。WorkBuddy AI 国际站账号请在账号池中添加。</p></div><button className="button primary" onClick={onAdd}><Plus size={15}/>添加服务</button></div>
     {feedback && <div className={`result-banner ${feedback.error ? 'error' : ''}`} role="status">{feedback.message}</div>}
     <DataTable columns={['服务','模型前缀','状态','模型数','操作']} empty={!rows.length && '暂未添加自定义服务'}>{rows.map(item => <tr key={item.id}><td><strong>{item.name}</strong><small>{item.kind === 'workbuddy_intl' ? 'WorkBuddy AI 国际站 · ' : ''}{item.base_url}</small></td><td><code>{item.id}/</code></td><td><StatusBadge status={item.enabled ? 'ready' : 'paused'}/></td><td className="tabular">{item.models?.length || 0}</td><td className="row-menu"><ConnectionRowActions connection={item} csrf={csrf} onRefresh={onRefresh} onEdit={onEdit} onFeedback={(message, error) => setFeedback({ message, error })}/></td></tr>)}</DataTable>
   </section>
@@ -540,8 +540,31 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
 
 function Models({ data, onNavigate }) {
   const [query, setQuery] = useState('')
-  const rows = (data?.models || []).filter(m => m.id.toLowerCase().includes(query.toLowerCase()))
-  return <section className="content-card"><div className="section-head"><div><span className="section-label">模型目录</span><h2>{data?.models?.length || 0} 个可用模型</h2></div><label className="search-box"><Search size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索模型" /></label></div><DataTable columns={['模型 ID','来源','兼容接口','']} empty={!rows.length && '没有匹配的模型'}>{rows.map(m => <tr key={m.id}><td><code>{m.id}</code></td><td><span className="provider-badge">{providerName(m.owned_by)}</span></td><td className="muted">{m.owned_by === 'codebuddy' ? 'Chat · Responses · Messages' : 'Chat Completions'}</td><td><button className="link-button" onClick={() => onNavigate('test')}>测试</button></td></tr>)}</DataTable></section>
+  const [prefix, setPrefix] = useState('')
+  const models = data?.models || []
+  const groups = useMemo(() => {
+    const counts = new Map()
+    for (const model of models) {
+      const id = model.id.split('/')[0]
+      counts.set(id, (counts.get(id) || 0) + 1)
+    }
+    const order = ['trae', 'codebuddy', 'workbuddy', 'monkeycode', 'qoder-cn', 'qoder', 'route']
+    return [...order.filter(id => counts.has(id)), ...[...counts.keys()].filter(id => !order.includes(id))]
+      .map(id => ({ id, label: providerName(id === 'qoder-cn' ? 'qoder_cn' : id), count: counts.get(id) }))
+  }, [models])
+  useEffect(() => {
+    if (prefix && !groups.some(group => group.id === prefix)) setPrefix('')
+  }, [prefix, groups])
+  const search = query.trim().toLowerCase()
+  const rows = models.filter(model => (!prefix || model.id.split('/')[0] === prefix) &&
+    `${model.id} ${model.name || ''}`.toLowerCase().includes(search))
+  return <section className="content-card">
+    <div className="section-head"><div><span className="section-label">模型目录</span><h2>{rows.length} 个可用模型</h2></div><label className="search-box"><Search size={15}/><input type="search" aria-label="搜索模型" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索模型" /></label></div>
+    <div className="filter-tabs model-filters" role="group" aria-label="模型前缀分类">
+      {[{ id: '', label: '全部', count: models.length }, ...groups].map(group => <button type="button" key={group.id} aria-pressed={prefix === group.id} className={prefix === group.id ? 'active' : ''} onClick={() => setPrefix(group.id)}>{group.label}<span className="model-filter-count">{group.count}</span></button>)}
+    </div>
+    <DataTable columns={['模型','来源','兼容接口','']} empty={!rows.length && '没有匹配的模型'}>{rows.map(model => <tr key={model.id}><td>{model.name && !['qoder','qoder_cn'].includes(model.owned_by) && <strong>{model.name}</strong>}<code>{model.id}</code>{model.catalog_source === 'snapshot' && <small className="muted">官方快照，刷新账号后同步实时目录</small>}</td><td><span className="provider-badge">{providerName(model.owned_by)}</span></td><td className="muted">{['codebuddy','qoder','qoder_cn'].includes(model.owned_by) ? 'Chat · Responses · Messages' : model.owned_by === 'workbuddy' ? 'Chat · Responses' : 'Chat Completions'}</td><td><button className="link-button" onClick={() => onNavigate('test')}>测试</button></td></tr>)}</DataTable>
+  </section>
 }
 
 function KeyRowActions({ apiKey, csrf, onRefresh, onFeedback }) {
@@ -632,7 +655,7 @@ function Keys({ data, csrf, onRefresh, onAdd }) {
 function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
   const models = (data?.models || []).filter(model => !model.id.startsWith('route/'))
   const [modelQuery, setModelQuery] = useState('')
-  const visibleModels = models.filter(model => model.id.toLowerCase().includes(modelQuery.trim().toLowerCase()))
+  const visibleModels = models.filter(model => `${model.id} ${model.name || ''}`.toLowerCase().includes(modelQuery.trim().toLowerCase()))
   const [form, setForm] = useState(() => initialRoute ? {
     id: initialRoute.id, name: initialRoute.name, strategy: initialRoute.strategy,
     retries: initialRoute.retries, cooldown_seconds: initialRoute.cooldown_seconds,
@@ -927,7 +950,7 @@ function Automation({ data, csrf, onRefresh }) {
   }
   return <div className="settings-grid">
     <form className="content-card" onSubmit={save}><span className="section-label">计划任务</span><h2>签到与余额刷新</h2>
-      <label className="switch-row"><span><strong>每日自动签到</strong><small>按服务器所在时区执行</small></span><input type="checkbox" checked={Boolean(form.auto_checkin)} onChange={e => update('auto_checkin', e.target.checked)}/></label>
+      <label className="switch-row"><span><strong>每日自动签到</strong><small>包含 WorkBuddy 国际站每日活跃；按服务器所在时区执行</small></span><input type="checkbox" checked={Boolean(form.auto_checkin)} onChange={e => update('auto_checkin', e.target.checked)}/></label>
       <label>每日签到时间</label><input type="time" value={form.checkin_time || '09:00'} onChange={e => update('checkin_time', e.target.value)}/>
       <label className="switch-row"><span><strong>自动刷新状态与余额</strong><small>同步凭据状态并查询最新额度</small></span><input type="checkbox" checked={Boolean(form.auto_refresh)} onChange={e => update('auto_refresh', e.target.checked)}/></label>
       <label>刷新间隔（分钟）</label><input type="number" min="5" max="1440" value={form.refresh_minutes || 30} onChange={e => update('refresh_minutes', Number(e.target.value))}/>
@@ -1053,7 +1076,7 @@ function App() {
   const [title, description] = pageMeta[page]
   const pages = {
     overview: <Overview data={data} onNavigate={navigate}/>,
-    accounts: <Accounts data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('account')} onAddWorkBuddy={() => setDialog('workbuddy_login')} onEditWorkBuddy={connection => { setEditingConnection(connection); setDialog('connection') }}/>,
+    accounts: <Accounts data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('account')}/>,
     connections: <Connections data={data} csrf={csrf} onRefresh={load} onAdd={() => { setEditingConnection(null); setDialog('connection') }} onEdit={connection => { setEditingConnection(connection); setDialog('connection') }}/>,
     models: <Models data={data} onNavigate={navigate}/>,
     keys: <Keys data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('key')}/>,
@@ -1079,13 +1102,13 @@ function App() {
     </aside>
     <div className="workspace">
       <header className="topbar"><button className="menu-button" onClick={() => setDrawer(true)}><Menu size={19}/></button><div><span>Unified / {title}</span></div><div className="top-actions"><span className="live-status"><i/>运行中</span><button className="icon-action" onClick={load} aria-label="刷新"><RefreshCw size={16} className={loading ? 'spin' : ''}/></button></div></header>
-      <main className="page"><header className="page-heading"><div><h1>{title}</h1><p>{description}</p></div>{page === 'accounts' && <button className="button primary" onClick={() => setDialog('account')}><Plus size={15}/>添加账号</button>}</header>{content}</main>
+      <main className="page"><header className="page-heading"><div><h1>{title}</h1><p>{description}</p></div></header>{content}</main>
     </div>
-    {(dialog === 'account' || dialog === 'workbuddy_login') && (
-      <AccountDialog key={dialog} csrf={csrf} initialProvider={dialog === 'workbuddy_login' ? 'workbuddy_intl' : 'trae'} onClose={() => setDialog(null)} onSaved={() => saved()}/>
+    {dialog === 'account' && (
+      <AccountDialog key={dialog} csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved()}/>
     )}
-    {(dialog === 'connection' || dialog === 'workbuddy') && (
-      <ConnectionDialog key={editingConnection?.id || dialog} csrf={csrf} initialConnection={editingConnection} defaultKind={dialog === 'workbuddy' ? 'workbuddy_intl' : 'openai'} onClose={() => setDialog(null)} onSaved={() => saved()}/>
+    {dialog === 'connection' && (
+      <ConnectionDialog key={editingConnection?.id || dialog} csrf={csrf} initialConnection={editingConnection} onClose={() => setDialog(null)} onSaved={() => saved()}/>
     )}
     {dialog === 'key' && (
       <KeyDialog csrf={csrf} onClose={() => setDialog(null)} onSaved={() => saved(true)}/>

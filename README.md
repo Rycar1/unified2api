@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  TRAE · CodeBuddy 国内 · WorkBuddy AI 国际站 · MonkeyCode · 自定义服务
+  TRAE · CodeBuddy 国内 · WorkBuddy AI 国际站 · MonkeyCode · Qoder 国内／国际 · 自定义服务
 </p>
 
 ## 界面预览
@@ -61,6 +61,7 @@
 | CodeBuddy 国内 | 网页登录或导入凭据 | `codebuddy/` |
 | WorkBuddy AI 国际站 | 官方网页授权；支持多个账号 | `workbuddy/` |
 | MonkeyCode | Windows 登录助手或导入凭据 | `monkeycode/` |
+| Qoder 国内／国际 | 官方网页授权、PAT 或 JSON；分区多账号池 | `qoder-cn/`、`qoder/` |
 | 自定义服务 | Base URL + API Key | 自定前缀 |
 | 智能路由 | 在控制台选择目标模型 | `route/` |
 
@@ -102,7 +103,9 @@ docker compose up -d --build
 
 ## 添加账号与调用模型
 
-在控制台的「账号」页选择平台并完成登录。TRAE 与 CodeBuddy 可以导入平台支持的凭据；MonkeyCode 可下载 Windows 登录助手。WorkBuddy AI 国际站使用官方网页授权，账号保存在独立的 Docker 数据卷中，无需启动桌面端。
+在控制台的「账号」页选择平台并完成登录。TRAE 与 CodeBuddy 可以导入平台支持的凭据；MonkeyCode 可下载 Windows 登录助手。WorkBuddy AI 国际站使用官方网页授权，可连续添加多个账号，在账号池中分别查询余额、刷新、停用或删除。调用 `workbuddy/` 模型时由国际站账号池自动选择账号，无需创建自定义服务。账号保存在独立的 Docker 数据卷中，无需启动桌面端。
+
+WorkBuddy 国际站的「每日活跃」会发送一条简短对话；原账号池自带自动巡检。Unified 的「全部签到」和「每日自动签到」也包含该操作，并跳过当天已经完成活跃的账号。
 
 新建客户端密钥后，可以用任何支持 OpenAI Chat Completions 的客户端连接：
 
@@ -130,6 +133,26 @@ curl http://localhost:8080/v1/models \
 
 智能路由把多个模型放在一个稳定别名下。例如创建 `code-stable` 路由后，客户端调用 `route/code-stable`。可选择顺序优先、轮询或低延迟策略；上游在开始响应前失败时，会按配置尝试下一个目标。
 
+### Qoder
+
+在「账号 → 添加账号」选择 **Qoder**，打开官方登录页完成授权，账号会自动保存到独立账号池。重复登录可添加其他账号；调用时轮换使用可用账号，连接建立前失败会尝试其他账号。
+
+在添加账号时选择国内版或国际版。也可粘贴官方网页「设置 → 个人访问令牌」中创建的 PAT（`pt-` 开头），或导入旧版 `auth_user_info_raw` JSON、Qoder2API-Hub 的 `uid` / `accessToken` / `refreshToken` JSON。凭据只保存到持久化管理目录，并纳入加密备份。
+
+Qoder 接入复用 [Qoder2API-Hub](https://github.com/shuishuipingan/qoder2api-hub) 的 Python 模块，仍在同一个容器中运行。国内账号与国际账号、模型目录及登录参数分别管理：国内模型使用 `qoder-cn/`，国际模型使用 `qoder/`。模型 ID 使用易读名称，例如 `qoder/qwen3.8-flash` 和 `qoder-cn/qwen3.8-flash`，控制台统一显示一行；旧的 `qoder/qfmodel` 等上游键名仍可调用。旧账号首次启动自动迁移，保留 ID 和备注，并在数据目录留存迁移前备份。登录或点击「刷新」后读取官方模型目录；首次目录查询完成前使用上游项目的分区快照，并标注目录来源。额度统计订阅、加油包及有效专属资源包；未知显示「—」，明确为零显示 `0`。调用资格以模型的实际响应为准。
+
+支持 Chat、Responses 和 Messages 格式转换。Responses 并非上游原生 OpenAI 接口，也不提供 Codex 的远程压缩能力。流内错误会立即回显；缺少完成标记的中断不会被报告为成功。
+
+Responses 的 `previous_response_id` 续接信息只在内存保留，最多 1 小时，并限制缓存容量；重启或过期后请提供完整 `input`。
+
+支持网页登录、PAT 交换、凭据自动续期和手动签到。「自动任务」中开启每日自动签到后，也会执行 Qoder 每日积分活动；未开启时不会自动领取。国际版签到复用上游官方活动检测与领取逻辑。Docker 构建会从官方 `@qoder-ai/qodercli@1.1.65` 提取 UMID 原生组件，校验固定 SHA-512 和目标架构后打入镜像，不需要另起容器或安装桌面端；组件提取或校验失败会中止构建。活动请求使用该组件生成的真实机器身份，运行时需要联网。
+
+账号行的「签到」、账号页的「全部签到」和「自动任务」的每日签到均覆盖 Qoder 国内／国际账号。返回实际 `earned_credit` 和最新余额；已领取、活动关闭、资格不足或同一设备／身份已领取会显示官方结果，不把跳过计为新获得的积分。同设备多账号是否能领取由官方规则决定。
+
+续期失败且登录过期后，需要重新授权。接入不会启动上游独立控制台、读取本机其他客户端凭据或另存对话正文。
+
+模型页支持按前缀分类、数量显示和分类内搜索，Qoder 国内／国际、自定义服务与智能路由分别归类。
+
 ### 协议支持
 
 | 模型前缀 | Chat Completions | Responses | Messages |
@@ -138,10 +161,10 @@ curl http://localhost:8080/v1/models \
 | `codebuddy/` | ✓ | ✓ | ✓ |
 | `workbuddy/` | ✓ | ✓ | — |
 | `monkeycode/` | 文本对话 | — | — |
+| `qoder/` | ✓ | 格式兼容 | 格式兼容 |
+| `qoder-cn/` | ✓ | 格式兼容 | 格式兼容 |
 | 自定义前缀 | 视上游而定 | 视上游而定 | — |
 | `route/` | 视目标而定 | 视目标而定 | 视目标而定 |
-
-CodeBuddy 的 `deepseek-v4.1-flash` 在客户端未设置推理强度时默认使用 `reasoning_effort: high`；显式设置会覆盖默认值。
 
 ## 统计、自动任务与备份
 
@@ -165,7 +188,8 @@ CodeBuddy 的 `deepseek-v4.1-flash` 在客户端未设置推理强度时默认�
 
 - `.env`、Cookie、账号导出文件和真实 API Key 不应提交到 GitHub。
 - 管理会话使用 HttpOnly Cookie，写操作需要 CSRF Token；上游 Key 不会在管理列表中明文回显。
-- WorkBuddy 国际站账号池只在 Docker 内部网络运行，不向公网暴露端口。
+- 默认只运行一个 Docker 容器。WorkBuddy 国际站的 Python 账号池由主程序管理，在容器内监听回环地址，不向公网暴露端口。沿用原有数据卷，升级无需重新添加账号。
+- 控制台、智能路由、CodeBuddy、WorkBuddy 和 Qoder 使用 Python；TRAE 和 MonkeyCode 暂保留进程内的 Go 桥接库。
 - 对外部署时使用 HTTPS、设置 `SECURE_COOKIE=true`，并限制管理端的访问来源。
 
 本项目用于个人账号与本地服务管理。请遵守对应平台的服务条款。
@@ -195,5 +219,6 @@ docker compose logs --tail 100
 - [ShouZhuo0413/codebuddy2api](https://github.com/ShouZhuo0413/codebuddy2api)
 - [ZFXing-lite/monkeycode2api](https://github.com/ZFXing-lite/monkeycode2api)
 - [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)
+- [shuishuipingan/qoder2api-hub](https://github.com/shuishuipingan/qoder2api-hub)（MIT；Qoder 国内／国际接入）
 
 各组件继续适用其原许可证，详见 `vendor/`。

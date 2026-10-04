@@ -1,0 +1,70 @@
+{
+  "request_id": "d5c39e36-59a0-45ff-9c89-62cf92f9d9de",
+  "request_set_id": "1483bf91-0761-4235-a0b5-9be4b611abbc",
+  "chat_record_id": "689e1642-22d9-4ff6-873b-457f66cbeed4",
+  "stream": true,
+  "chat_task": "FREE_INPUT",
+  "chat_context": {
+    "chatPrompt": "",
+    "extra": {
+      "context": [],
+      "modelConfig": {
+        "is_reasoning": false,
+        "key": "lite"
+      },
+      "originalContent": {
+        "type": "text",
+        "text": "hi"
+      }
+    },
+    "features": [],
+    "imageUrls": null,
+    "text": {
+      "type": "text",
+      "text": "hi"
+    }
+  },
+  "image_urls": null,
+  "is_reply": true,
+  "is_retry": false,
+  "session_id": "10b6e00f-0fc5-4090-ade6-d3ba01858a80",
+  "code_language": "",
+  "source": 1,
+  "version": "3",
+  "chat_prompt": "",
+  "parameters": {
+    "max_tokens": 32768
+  },
+  "aliyun_user_type": "personal_standard",
+  "session_type": "qodercli",
+  "agent_id": "agent_common",
+  "task_id": "common",
+  "model_config": {
+    "key": "lite",
+    "display_name": "Lite",
+    "model": "",
+    "format": "openai",
+    "is_vl": false,
+    "is_reasoning": false,
+    "api_key": "",
+    "url": "",
+    "source": "system",
+    "max_input_tokens": 180000
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    }
+  ],
+  "tools": [],
+  "business": {
+    "product": "cli",
+    "version": "0.1.43",
+    "type": "agent",
+    "id": "40be4bf3-f132-43d8-a9fe-153b7ecbe232",
+    "name": "hi",
+    "begin_at": 1785029502724,
+    "stage": "start"
+  }
+}

@@ -426,13 +426,18 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 					onErr(se)
 				}
 				msg := fmt.Sprintf("solo error code=%d msg=%s", ev.ErrorCode, ev.ErrorMessage)
-				if _, err := io.WriteString(w, "event: error\n"+"data: "+jsonEscape(msg)+"\n\n"); err != nil {
+				raw, _ := json.Marshal(map[string]any{"error": map[string]any{
+					"message": msg, "type": "upstream_error", "code": ev.ErrorCode,
+				}})
+				if _, err := io.WriteString(w, "data: "+string(raw)+"\n\n"); err != nil {
 					return err
 				}
 				if err := writeDONE(); err != nil {
 					return err
 				}
-				sawDone = true
+				// [DONE] is terminal for OpenAI clients. Never append a later
+				// upstream done event which would disguise the error as success.
+				return se
 			}
 		}
 		if err == io.EOF {

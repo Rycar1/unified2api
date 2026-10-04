@@ -61,7 +61,8 @@ class Scheduler:
 
     def _run_loop(self):
         # 启动后先休眠 10 秒等待主服务就绪，然后执行初次检查
-        time.sleep(10)
+        if self._stop_event.wait(10):
+            return
         try:
             self._execute_cycle("启动初次初始化巡检")
         except Exception as exc:
@@ -81,7 +82,7 @@ class Scheduler:
                         self._execute_cycle(reason)
                     except Exception as exc:
                         self.log(f"排程执行异常: {exc}")
-                    time.sleep(65) # 避开当前这一分钟重复触发
+                    self._stop_event.wait(65) # 避开当前这一分钟重复触发
             self._stop_event.wait(30)
 
     def _calc_next_fire(self):

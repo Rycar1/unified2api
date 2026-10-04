@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Unified2API gateway once per minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=unified2api-watchdog.service
+
+[Install]
+WantedBy=timers.target

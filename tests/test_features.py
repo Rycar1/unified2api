@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from unified.features import AutomationManager, BackupManager, RequestLog, RouteManager, UnifiedConfig
+from unified.features import AutomationManager, BackupManager, RequestLog, RequestLogMiddleware, RouteManager, UnifiedConfig
 from unified.server import API
 
 
@@ -108,6 +108,34 @@ class FeatureStores(unittest.TestCase):
 
 
 class RouteDispatch(unittest.IsolatedAsyncioTestCase):
+    async def test_named_sse_error_falls_back_before_done(self):
+        routes = RouteManager(UnifiedConfig(FakeStore()))
+        routes.save({"id": "stable", "targets": ["trae/bad", "codebuddy/good"],
+                     "retries": 1}, {"trae/bad", "codebuddy/good"})
+
+        class Upstream(API):
+            async def __call__(self, scope, receive, send):
+                payload = json.loads((await receive())["body"])
+                body = (b'event: error\ndata: "upstream rejected request"\n\ndata: [DONE]\n\n'
+                        if payload["model"] == "trae/bad" else
+                        b'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+                await send({"type": "http.response.start", "status": 200,
+                            "headers": [(b"content-type", b"text/event-stream")]})
+                await send({"type": "http.response.body", "body": body, "more_body": False})
+
+        async def receive():
+            await asyncio.sleep(3600)
+
+        sent = []
+        async def send(message):
+            sent.append(message)
+        scope = {"path": "/v1/chat/completions", "headers": []}
+        await Upstream(None, None, None, routes=routes).route_request(
+            "stable", scope, receive, send, {"model": "route/stable", "stream": True})
+        self.assertEqual(scope["state"]["resolved_model"], "codebuddy/good")
+        self.assertNotIn(b"upstream rejected", b"".join(m.get("body", b"") for m in sent))
+        self.assertGreater(routes.health["trae/bad"]["cooldown_until"], 0)
+
     async def test_failed_target_falls_back_to_next_model(self):
         store = FakeStore()
         store.check_api = lambda *args: None
@@ -190,6 +218,54 @@ class RouteDispatch(unittest.IsolatedAsyncioTestCase):
         release.set()
         await asyncio.wait_for(task, .5)
         self.assertTrue(any(item.get("body", b"").startswith(b"data: [DONE]") for item in sent))
+
+
+class StreamIntegrity(unittest.IsolatedAsyncioTestCase):
+    async def test_chat_stream_without_finish_reason_is_recorded_as_failed(self):
+        with tempfile.TemporaryDirectory() as root:
+            log = RequestLog(Path(root) / "requests.sqlite")
+
+            async def run(chunks):
+                async def app(scope, receive, send):
+                    await receive()
+                    scope.setdefault("state", {})["resolved_model"] = "workbuddy/deepseek-v4.1-flash"
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [(b"content-type", b"text/event-stream")]})
+                    for index, chunk in enumerate(chunks):
+                        await send({"type": "http.response.body", "body": chunk,
+                                    "more_body": index < len(chunks) - 1})
+
+                raw = b'{"model":"route/deepseek-v41","stream":true}'
+                received = False
+
+                async def receive():
+                    nonlocal received
+                    if not received:
+                        received = True
+                        return {"type": "http.request", "body": raw, "more_body": False}
+                    await asyncio.sleep(3600)
+
+                async def send(message):
+                    pass
+
+                scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions"}
+                await RequestLogMiddleware(app, log)(scope, receive, send)
+                return log.query(limit=1)["items"][0]
+
+            incomplete = await run([b'data: {"choices":[{"delta":{"content":"OK"}}]}\n\n', b'data: [DONE]\n\n'])
+            self.assertFalse(incomplete["ok"])
+            self.assertEqual(incomplete["outcome"], "missing_finish_reason")
+            self.assertEqual(incomplete["resolved_model"], "workbuddy/deepseek-v4.1-flash")
+            complete = await run([b'data: {"choices":[{"finish_', b'reason":"stop"}]}\n\ndata: [DONE]\n\n'])
+            self.assertTrue(complete["ok"])
+            self.assertEqual(complete["outcome"], "success")
+            legacy_error = await run([b'event: error\ndata: "upstream error"\n\ndata: [DONE]\n\n',
+                                      b'data: {"choices":[{"finish_reason":"stop"}]}\n\n'])
+            self.assertFalse(legacy_error["ok"])
+            self.assertEqual(legacy_error["outcome"], "stream_error")
+            late_finish = await run([b'data: [DONE]\n\ndata: {"choices":[{"finish_reason":"stop"}]}\n\n'])
+            self.assertFalse(late_finish["ok"])
+            self.assertEqual(late_finish["outcome"], "missing_finish_reason")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@ from .trae import Trae
 from .custom import Connections
 from .monkey_login import MonkeyLogin
 from .workbuddy_login import WorkBuddyLogin
+from .qoder_accounts_hub import QoderAccounts
+from .workbuddy_runtime import EmbeddedWorkBuddy
 from .errors import safe_error_message
 from .features import (AutomationManager, BackupManager, RequestLog,
                        RequestLogMiddleware, RouteManager, UnifiedConfig)
@@ -28,6 +30,10 @@ PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/messages"}
 
 
 def response_failed(body):
+    # Some upstreams use a named SSE error with a JSON string payload.
+    # OpenAI clients skip that event and stop at [DONE], hiding the cause.
+    if any(line.startswith(b"event:") and line[6:].strip() == b"error" for line in body.splitlines()):
+        return True
     values = []
     try:
         values.append(json.loads(body))
@@ -55,10 +61,12 @@ async def body_json(req):
 
 
 class API:
-    def __init__(self, app, buddy, native, connections=None, routes=None):
+    def __init__(self, app, buddy, native, connections=None, routes=None, workbuddy=None, qoder=None):
         self.app, self.buddy, self.native = app, buddy, native
         self.connections = connections
         self.routes = routes
+        self.workbuddy = workbuddy
+        self.qoder = qoder
 
     async def models(self):
         code, result = await self.native.request("GET", "/v1/models")
@@ -72,8 +80,16 @@ class API:
             models += [{**m, "id": "monkeycode/" + m["id"], "owned_by": "monkeycode"} for m in (result.get("data") or [])]
         else:
             unavailable.append("monkeycode")
+
+        if self.qoder:
+            models += await self.qoder.models()
         if self.connections:
             models += self.connections.models()
+        if self.workbuddy:
+            try:
+                models += await asyncio.wait_for(self.workbuddy.models(), 12)
+            except (HTTPException, asyncio.TimeoutError):
+                unavailable.append("workbuddy")
         if self.routes:
             models += self.routes.public_models()
         return {"object": "list", "data": models, "unavailable_providers": unavailable}
@@ -225,7 +241,9 @@ class API:
                 raise HTTPException(400, "请指定带平台前缀的模型")
             provider, sep, model = data["model"].partition("/")
             custom_ids = {r["id"] for r in self.connections.rows()} if self.connections else set()
-            providers = {"trae", "codebuddy", "monkeycode"} | custom_ids
+            providers = {"trae", "codebuddy", "monkeycode", "qoder", "qoder-cn"} | custom_ids
+            if self.workbuddy:
+                providers.add("workbuddy")
             if self.routes:
                 providers.add("route")
             if not sep or provider not in providers or not model.strip():
@@ -235,6 +253,8 @@ class API:
             if provider in {"trae", "monkeycode"} and path != "/v1/chat/completions":
                 raise HTTPException(400, "此平台当前仅支持 Chat Completions")
             data["model"] = model
+            if provider in {"qoder", "qoder-cn"}:
+                data["qoder_region"] = "cn" if provider == "qoder-cn" else "global"
             try:
                 body = json.dumps(data, ensure_ascii=False, allow_nan=False).encode()
             except (ValueError, RecursionError):
@@ -243,6 +263,10 @@ class API:
                 return await self.stream_native(scope, receive, send, body)
             if provider == "monkeycode":
                 return await self.stream_native({**scope, "path": "/monkey" + path}, receive, send, body)
+            if provider in {"qoder", "qoder-cn"}:
+                return await self.qoder.relay(path, body, scope, receive, send)
+            if provider == "workbuddy":
+                return await self.workbuddy.relay(path, body, scope, receive, send)
             if provider in custom_ids:
                 return await self.connections.relay(provider, path, body, scope, receive, send)
             sent = False
@@ -260,11 +284,20 @@ class API:
             return await JSONResponse({"error": {"message": exc.detail, "type": "invalid_request_error"}}, exc.status_code)(scope, receive, send)
 
 
-def create_app(native=None, buddy=None):
+def create_app(native=None, buddy=None, qoder_transport=None):
     buddy = buddy or create_buddy(secure_cookie=os.environ.get("SECURE_COOKIE", "false").lower() == "true")
     native = native or Trae()
     store, pool = buddy.state.store, buddy.state.pool
     connections = Connections(store.root / "connections.json")
+    qoder_accounts = QoderAccounts(store, transport=qoder_transport)
+    embedded_workbuddy = None
+    if os.environ.get("WORKBUDDY_EMBEDDED", "false").lower() == "true":
+        embedded_workbuddy = EmbeddedWorkBuddy(os.environ.get("UNIFIED_API_KEY", ""), os.environ.get("ADMIN_KEY", ""),
+            Path(os.environ.get("WORKBUDDY_ACCOUNTS_DIR", "/data/workbuddy/accounts")),
+            Path(os.environ.get("WORKBUDDY_USAGE_DIR", "/data/workbuddy/usage")))
+    workbuddy_login = WorkBuddyLogin(store, connections, os.environ.get("UNIFIED_API_KEY", ""),
+                                     os.environ.get("ADMIN_KEY", ""),
+                                     os.environ.get("WORKBUDDY_HUB_URL", "http://workbuddy-hub:8788"))
     metrics = RequestMetrics()
     login_owners = {}
     unified_config = UnifiedConfig(store)
@@ -282,18 +315,25 @@ def create_app(native=None, buddy=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        async with buddy.router.lifespan_context(buddy):
+        from contextlib import AsyncExitStack
+        async with AsyncExitStack() as stack:
+            if embedded_workbuddy:
+                await stack.enter_async_context(embedded_workbuddy)
+            await stack.enter_async_context(buddy.router.lifespan_context(buddy))
             automation_task = asyncio.create_task(automation.loop())
+            qoder_refresh_task = asyncio.create_task(qoder_accounts.maintain())
             try:
                 yield
             finally:
                 automation_task.cancel()
-                await asyncio.gather(automation_task, return_exceptions=True)
+                qoder_refresh_task.cancel()
+                await asyncio.gather(automation_task, qoder_refresh_task, return_exceptions=True)
+                await qoder_accounts.close()
                 native.close()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(AdminMiddleware)
-    api = API(app, buddy, native, connections, routes)
+    api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts)
 
     async def trae(method, path, obj=None):
         code, data = await native.request(method, path, json.dumps(obj).encode() if obj is not None else b"")
@@ -309,7 +349,7 @@ def create_app(native=None, buddy=None):
     @app.get("/healthz")
     @app.get("/health")
     async def health():
-        return {"status": "ok", "mode": "single-process", "providers": ["trae", "codebuddy", "monkeycode", "custom"]}
+        return {"status": "ok", "mode": "gateway", "providers": ["trae", "codebuddy", "workbuddy", "monkeycode", "qoder", "custom"]}
 
     @app.get("/admin/")
     async def home():
@@ -340,16 +380,11 @@ def create_app(native=None, buddy=None):
                       "enabled": not a["disabled"], "status": "paused" if a["disabled"] else "cooling" if a["cooling"] else "ready",
                       "remaining": a["balance"] / 1000, "daily_tokens": a["daily_token_balance"], "last_error": a.get("reason", "")}
                      for a in monkey.get("accounts", [])]
-        if any(c.get("adapter") == "hub" for c in connections.rows()):
-            try:
-                hub_accounts = (await workbuddy_login.hub("GET", "/accounts?realm=intl")).get("accounts", [])
-                rows += [{"id": a["uid"], "uid": a["uid"], "provider": "workbuddy_intl",
-                          "name": a.get("nickname") or a["uid"], "enabled": a.get("enabled", False),
-                          "status": "paused" if not a.get("enabled") else "cooling" if a.get("inCooldown") else "ready",
-                          "expires_at": (a.get("expiresAt") or 0) * 1000}
-                         for a in hub_accounts if isinstance(a, dict) and isinstance(a.get("uid"), str)]
-            except HTTPException:
-                pass
+        rows += await qoder_accounts.accounts()
+        try:
+            rows += await asyncio.wait_for(workbuddy_login.public_accounts(), 8)
+        except (HTTPException, asyncio.TimeoutError):
+            pass
         return {"accounts": rows, "connections": connections.rows(), "keys": keys, "pool": settings, "metrics": metrics.snapshot(),
                 "models": (await api.models())["data"], "routes": routes.rows(), "automation": automation.settings(),
                 "automation_history": unified_config.get("automation_history", [])[:10],
@@ -492,6 +527,17 @@ def create_app(native=None, buddy=None):
         else:
             monkey_results.append({"ok": False, "message": "MonkeyCode 服务暂时不可用"})
         groups.append({"provider": "monkeycode", "results": monkey_results})
+        try:
+            qoder_results = await qoder_accounts.refresh_all(action)
+        except HTTPException as exc:
+            qoder_results = [{"ok": False, "message": str(exc.detail)}]
+        groups.append({"provider": "qoder", "results": qoder_results})
+        if action == "checkin":
+            try:
+                workbuddy_results = await workbuddy_login.daily_active_all()
+            except HTTPException as exc:
+                workbuddy_results = [{"ok": False, "message": str(exc.detail)}]
+            groups.append({"provider": "workbuddy_intl", "results": workbuddy_results})
         all_results = [item for group in groups for item in group["results"]]
         return {"providers": groups, "summary": {
             "total": len(all_results),
@@ -579,6 +625,10 @@ def create_app(native=None, buddy=None):
             return await asyncio.to_thread(pool.operate, aid, "status")
         elif provider == "monkeycode":
             return await balance_monkey(aid, req)
+        elif provider == "workbuddy_intl":
+            return await workbuddy_login.operate(aid, "balance")
+        elif provider == "qoder":
+            return await qoder_accounts.operate(aid, "balance")
         else:
             raise HTTPException(404, "不支持的平台")
 
@@ -598,7 +648,9 @@ def create_app(native=None, buddy=None):
         return connections.delete(cid) if req.method == "DELETE" else connections.save(await body_json(req), cid)
 
     async def routable_models():
-        return {item["id"] for item in (await api.models())["data"] if not item["id"].startswith("route/")}
+        models = {item["id"] for item in (await api.models())["data"] if not item["id"].startswith("route/")}
+        models.update(qoder_accounts.legacy_model_ids())
+        return models
 
     @app.get("/admin/api/unified/routes")
     async def list_routes(req: Request):
@@ -697,10 +749,8 @@ def create_app(native=None, buddy=None):
 
     monkey_login = MonkeyLogin(store, monkey_request)
     monkey_login.register(app, body_json)
-    workbuddy_login = WorkBuddyLogin(store, connections, os.environ.get("UNIFIED_API_KEY", ""),
-                                     os.environ.get("ADMIN_KEY", ""),
-                                     os.environ.get("WORKBUDDY_HUB_URL", "http://workbuddy-hub:8788"))
     workbuddy_login.register(app, body_json)
+    qoder_accounts.register(app, body_json)
 
     @app.get("/admin/downloads/monkey-login-helper.zip")
     async def login_helper_download(req: Request):
@@ -717,6 +767,7 @@ def create_app(native=None, buddy=None):
     result.state.connections = connections
     result.state.monkey_login = monkey_login
     result.state.workbuddy_login = workbuddy_login
+    result.state.qoder_accounts = qoder_accounts
     return result
 
 

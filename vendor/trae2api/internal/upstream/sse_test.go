@@ -117,6 +117,23 @@ func TestAggregateSOLOError(t *testing.T) {
 	}
 }
 
+func TestSOLOStreamErrorIsTerminal(t *testing.T) {
+	raw := "event:error\ndata:{\"code\":4001,\"message\":\"invalid parameter\"}\n\n" +
+		"event:done\ndata:{\"finish_reason\":\"stop\"}\n\n"
+	rec := httptest.NewRecorder()
+	err := Stream(rec, strings.NewReader(raw))
+	if err == nil {
+		t.Fatal("expected upstream error")
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"error":`) || strings.Contains(body, `"finish_reason"`) {
+		t.Fatalf("error must not become a successful completion: %s", body)
+	}
+	if strings.Count(body, "data: [DONE]") != 1 {
+		t.Fatalf("expected exactly one terminal marker: %s", body)
+	}
+}
+
 func TestParseSOLOLine(t *testing.T) {
 	ev, err := ParseSOLOLine("output", `{"response":"hi","reasoning_content":"think","tool_calls":null}`)
 	if err != nil {

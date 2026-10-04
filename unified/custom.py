@@ -27,6 +27,23 @@ class Connections:
         self.path, self.transport = path, transport
         self.lock = threading.RLock()
         self.data = json.loads(path.read_text("utf-8")) if path.exists() else {}
+        self._migrate_workbuddy()
+
+    def _migrate_workbuddy(self):
+        # Older releases stored the built-in international pool as a custom
+        # connection. Its credentials remain in the hub volume.
+        updated = {cid: row for cid, row in self.data.items()
+                   if not (row.get("kind") == "workbuddy_intl" and row.get("adapter") == "hub")}
+        legacy = updated.get("workbuddy")
+        if legacy:
+            cid = next((name for name in ("workbuddy_legacy", *(f"workbuddy_legacy{n}" for n in range(2, 100)))
+                        if name not in updated), None)
+            if cid:
+                updated.pop("workbuddy")
+                updated[cid] = {**legacy, "id": cid}
+        if updated != self.data:
+            write_json(self.path, updated)
+            self.data = updated
 
     def client(self, kind="openai"):
         return httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(900 if kind == "workbuddy_intl" else 300, connect=20),
@@ -51,7 +68,7 @@ class Connections:
                     continue
                 row[field] = body[field]
         cid = row.get("id", "")
-        if not isinstance(cid, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", cid) or cid in {"trae", "codebuddy", "monkeycode"}:
+        if not isinstance(cid, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", cid) or cid in {"trae", "codebuddy", "monkeycode", "workbuddy", "qoder", "qoder-cn"}:
             raise HTTPException(400, "服务标识须为小写英文开头的 1–40 位字母、数字、下划线或短横线，不能使用内置平台名称")
         for field in ("name", "base_url", "key"):
             if not isinstance(row.get(field), str) or not row[field].strip():
@@ -146,7 +163,9 @@ class Connections:
                  "provider_name": row["name"]} for row in self.rows() if row["enabled"] for model in row["models"]]
 
     async def relay(self, cid, path, body, scope, receive, send):
-        row = self.get(cid)
+        return await self.relay_row(self.get(cid), path, body, scope, receive, send)
+
+    async def relay_row(self, row, path, body, scope, receive, send):
         if not row["enabled"]:
             raise HTTPException(503, "自定义服务已暂停")
         if path not in {"/v1/chat/completions", "/v1/responses"}:

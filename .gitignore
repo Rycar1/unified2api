@@ -1,4 +1,7 @@
 # Local secrets and account data
+/data/
+/auths/
+/trae-data/
 .env
 .env.*
 !.env.example
@@ -7,6 +10,14 @@
 credentials.json
 accounts.json
 connections.json
+hub-accounts/
+hub-machine.json
+hub-models.json
+accounts.pre-hub.json
+hub-migration.json
+vendor/qoder2api-hub/umid/
+*.pem
+*.key
 
 # Python
 __pycache__/

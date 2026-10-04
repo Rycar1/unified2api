@@ -163,7 +163,8 @@ class RouteManager:
                 old = item.get("avg_duration_ms")
                 item["avg_duration_ms"] = round(duration_ms if old is None else old * .8 + duration_ms * .2)
                 item["cooldown_until"] = 0
-            elif status in {401, 402, 403, 408, 409, 429, 500, 502, 503, 504}:
+            elif status in {401, 402, 403, 408, 409, 429, 500, 502, 503, 504} or (
+                    status is not None and 200 <= status < 300):
                 item["cooldown_until"] = int(self.clock()) + cooldown_seconds
             if not ok or self.clock() - self.last_persist >= 15:
                 self.config.set("route_health", self.health)
@@ -330,12 +331,14 @@ class RequestLogMiddleware:
             return await receive()
         start = time.monotonic()
         status, completed, disconnected = None, False, False
+        stream_finished, stream_error = False, False
+        stream_done = False
         response = bytearray()
         stream_buffer = bytearray()
         content_type = b""
         usage = {}
         async def observed_send(message):
-            nonlocal status, completed, content_type, usage, stream_buffer
+            nonlocal status, completed, content_type, usage, stream_buffer, stream_finished, stream_error, stream_done
             if message["type"] == "http.response.start":
                 status = message["status"]
                 content_type = dict(message.get("headers", [])).get(b"content-type", b"")
@@ -348,9 +351,23 @@ class RequestLogMiddleware:
                     while b"\n" in stream_buffer:
                         line, _, remainder = stream_buffer.partition(b"\n")
                         stream_buffer = bytearray(remainder)
+                        if stream_done:
+                            continue
+                        if line.startswith(b"event:") and line[6:].strip() == b"error":
+                            stream_error = True
+                        if line.startswith(b"data:") and line[5:].strip() == b"[DONE]":
+                            stream_done = True
+                            continue
                         if line.startswith(b"data:") and line[5:].strip() != b"[DONE]":
                             try:
-                                usage.update(_usage_from(json.loads(line[5:].strip())))
+                                event = json.loads(line[5:].strip())
+                                usage.update(_usage_from(event))
+                                if scope["path"] == "/v1/chat/completions" and isinstance(event, dict):
+                                    stream_error |= bool(event.get("error")) or event.get("type") == "error"
+                                    choices = event.get("choices")
+                                    if isinstance(choices, list):
+                                        stream_finished |= any(isinstance(choice, dict) and bool(choice.get("finish_reason"))
+                                                               for choice in choices)
                             except (ValueError, UnicodeDecodeError):
                                 pass
                     if len(stream_buffer) > 65536:
@@ -366,11 +383,16 @@ class RequestLogMiddleware:
                     usage.update(_usage_from(json.loads(response)))
             except (ValueError, UnicodeDecodeError):
                 pass
-            ok = status is not None and 200 <= status < 300 and completed and not disconnected
+            chat_stream = scope["path"] == "/v1/chat/completions" and b"text/event-stream" in content_type
+            stream_complete = not chat_stream or (stream_finished and not stream_error)
+            ok = status is not None and 200 <= status < 300 and completed and not disconnected and stream_complete
+            outcome = ("success" if ok else "interrupted" if not completed else
+                       "stream_error" if chat_stream and stream_error else
+                       "missing_finish_reason" if chat_stream and not stream_finished and status == 200 else "http_error")
             self.request_log.record({"path": scope["path"], "model": model,
                 "resolved_model": scope.get("state", {}).get("resolved_model"), "status": status, "ok": ok,
                 "duration_ms": (time.monotonic() - start) * 1000,
-                "outcome": "success" if ok else "interrupted" if not completed else "http_error", **usage})
+                "outcome": outcome, **usage})
 
 
 class AutomationManager:

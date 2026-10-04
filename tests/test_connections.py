@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
@@ -69,6 +70,11 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post(self.path, headers=self.csrf, json=self.body)
         self.assertEqual(response.status_code, 200, response.text)
 
+    async def test_qoder_region_prefixes_cannot_be_used_by_custom_services(self):
+        for prefix in ('qoder','qoder-cn'):
+            response = await self.client.post(self.path,headers=self.csrf,json={**self.body,'id':prefix})
+            self.assertEqual(response.status_code,400,response.text)
+
     async def test_workbuddy_international_discovery_and_call(self):
         calls = []
         def upstream(request):
@@ -83,7 +89,7 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads(request.content)["model"], "claude-sonnet")
             return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
         self.app.state.connections.transport = httpx.MockTransport(upstream)
-        config = self.body | {"id": "workbuddy", "kind": "workbuddy_intl", "models": []}
+        config = self.body | {"id": "workbuddy_legacy", "kind": "workbuddy_intl", "models": []}
         discovered = await self.client.post(self.path + "/discover", headers=self.csrf, json=config)
         self.assertEqual(discovered.status_code, 200, discovered.text)
         self.assertEqual(discovered.json()["models"], ["claude-sonnet"])
@@ -91,15 +97,15 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         created = await self.client.post(self.path, headers=self.csrf, json=config)
         self.assertEqual(created.status_code, 200, created.text)
         listed = (await self.client.get("/v1/models", headers=self.api_headers)).json()["data"]
-        self.assertIn("workbuddy/claude-sonnet", [item["id"] for item in listed])
+        self.assertIn("workbuddy_legacy/claude-sonnet", [item["id"] for item in listed])
         call = await self.client.post("/v1/chat/completions", headers=self.api_headers,
-            json={"model": "workbuddy/claude-sonnet", "messages": [{"role": "user", "content": "hi"}]})
+            json={"model": "workbuddy_legacy/claude-sonnet", "messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(call.status_code, 200, call.text)
         self.assertEqual(call.json()["choices"][0]["message"]["content"], "ok")
         self.assertEqual(len(calls), 2)
         self.assertNotIn(config["key"], (await self.client.get("/admin/api/unified/overview")).text)
 
-    async def test_workbuddy_browser_login_saves_separate_connection(self):
+    async def test_workbuddy_browser_login_adds_first_class_account(self):
         def helper(request):
             if request.url.path == "/panel/login":
                 return httpx.Response(200, json={"token": "panel-session"})
@@ -110,7 +116,9 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
             if request.url.path == "/accounts/login/poll":
                 return httpx.Response(200, json={"status": "ok", "account": {"uid": "foreign-user"}})
             if request.url.path == "/accounts":
-                return httpx.Response(200, json={"accounts": [{"uid": "foreign-user", "nickname": "Foreign", "enabled": True}]})
+                return httpx.Response(200, json={"accounts": [{"uid": "foreign-user", "realm": "intl", "nickname": "Foreign", "enabled": True, "credits": {"remain": 42}}]})
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "fast-model"}]})
             return httpx.Response(404)
         def relay(request):
             self.assertEqual(request.headers["x-realm"], "intl")
@@ -129,41 +137,49 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
             status = await local.get(f"/admin/api/unified/workbuddy/login/{fid}")
             self.assertEqual(status.json()["state"], "success", status.text)
             overview = (await local.get("/admin/api/unified/overview")).json()
-            connection = next(item for item in overview["connections"] if item["kind"] == "workbuddy_intl")
-            self.assertEqual(connection["adapter"], "hub")
-            self.assertEqual(connection["models"], ["fast-model"])
+            self.assertFalse(any(item["kind"] == "workbuddy_intl" for item in overview["connections"]))
+            self.assertIn("workbuddy/fast-model", [model["id"] for model in overview["models"]])
             self.assertIn("foreign-user", [a["uid"] for a in overview["accounts"] if a["provider"] == "workbuddy_intl"])
+            self.assertEqual(next(a for a in overview["accounts"] if a["provider"] == "workbuddy_intl")["remaining"], 42)
             self.assertNotIn("panel-session", json.dumps(overview))
 
     async def test_workbuddy_hub_models_and_chat_use_international_realm(self):
         seen = []
+        def management(request):
+            if request.url.path == "/panel/login":
+                return httpx.Response(200, json={"token": "panel-session"})
+            if request.url.path == "/accounts":
+                return httpx.Response(200, json={"accounts": [{"uid": "foreign-user", "realm": "intl", "enabled": True}]})
+            if request.url.path == "/v1/models":
+                self.assertEqual(request.url.params["realm"], "intl")
+                return httpx.Response(200, json={"data": [{"id": "claude-sonnet"}]})
+            return httpx.Response(404)
         def hub(request):
             seen.append(request)
             self.assertEqual(request.headers["x-realm"], "intl")
-            self.assertEqual(request.headers["authorization"], "Bearer private-upstream-key")
-            if request.url.path == "/v1/models":
-                return httpx.Response(200, json={"data": [{"id": "claude-sonnet"}]})
+            self.assertEqual(request.headers["authorization"], "Bearer client-key")
             self.assertEqual(json.loads(request.content)["model"], "claude-sonnet")
             return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        self.app.state.workbuddy_login.client_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(management))
+        self.app.state.workbuddy_login.api_key = "client-key"
         self.app.state.connections.transport = httpx.MockTransport(hub)
-        body = self.body | {"id": "workbuddy", "kind": "workbuddy_intl", "adapter": "hub", "models": []}
-        discovered = await self.client.post(self.path + "/discover", headers=self.csrf, json=body)
-        self.assertEqual(discovered.status_code, 200, discovered.text)
-        self.assertEqual(discovered.json()["models"], ["claude-sonnet"])
-        body["models"] = discovered.json()["models"]
-        self.assertEqual((await self.client.post(self.path, headers=self.csrf, json=body)).status_code, 200)
+        models = (await self.client.get("/v1/models", headers=self.api_headers)).json()["data"]
+        self.assertIn("workbuddy/claude-sonnet", [item["id"] for item in models])
         response = await self.client.post("/v1/chat/completions", headers=self.api_headers,
             json={"model": "workbuddy/claude-sonnet", "messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["choices"][0]["message"]["content"], "ok")
-        self.assertEqual(len(seen), 2)
+        self.assertEqual(len(seen), 1)
 
-    async def test_workbuddy_local_import_requires_admin_and_saves_verified_connection(self):
+    async def test_workbuddy_existing_accounts_need_no_custom_connection(self):
         def helper(request):
             if request.url.path == "/panel/login":
                 return httpx.Response(200, json={"token": "panel-session"})
-            self.assertEqual(request.url.path, "/accounts")
-            return httpx.Response(200, json={"accounts": [{"uid": "foreign-user", "enabled": True}]})
+            if request.url.path == "/accounts":
+                return httpx.Response(200, json={"accounts": [{"uid": "foreign-user", "realm": "intl", "enabled": True}]})
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "fast-model"}]})
+            return httpx.Response(404)
         def relay(request):
             self.assertEqual(request.headers["x-realm"], "intl")
             return httpx.Response(200, json={"data": [
@@ -178,9 +194,46 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
             saved = await local.post("/admin/api/unified/workbuddy/import", headers=csrf, json={"name": "Intl"})
             self.assertEqual(saved.status_code, 200, saved.text)
             overview = (await local.get("/admin/api/unified/overview")).json()
-            connection = next(item for item in overview["connections"] if item["kind"] == "workbuddy_intl")
-            self.assertEqual(connection["models"], ["fast-model"])
-            self.assertEqual(connection["adapter"], "hub")
+            self.assertFalse(any(item["kind"] == "workbuddy_intl" for item in overview["connections"]))
+            self.assertIn("workbuddy/fast-model", [model["id"] for model in overview["models"]])
+
+    async def test_workbuddy_account_actions_are_isolated_to_international_pool(self):
+        account = {"uid": "foreign-user", "realm": "intl", "enabled": True, "credits": {"remain": 20}}
+        domestic = {"uid": "domestic-user", "realm": "cn", "enabled": True}
+        def hub(request):
+            nonlocal account
+            if request.url.path == "/panel/login":
+                return httpx.Response(200, json={"token": "panel-session"})
+            if request.url.path == "/accounts":
+                return httpx.Response(200, json={"accounts": [account, domestic] if account else [domestic]})
+            payload = json.loads(request.content)
+            self.assertEqual(payload["uid"], "foreign-user")
+            if request.url.path == "/accounts/set":
+                account["enabled"] = payload["enabled"]
+                return httpx.Response(200, json={"account": account})
+            if request.url.path == "/accounts/delete":
+                account = None
+                return httpx.Response(200, json={"deleted": True})
+            if request.url.path == "/accounts/credits/fetch":
+                account["credits"]["remain"] = 25
+            return httpx.Response(200, json={"results": [{"uid": "foreign-user", "ok": True}]})
+        self.app.state.workbuddy_login.client_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(hub))
+        path = "/admin/api/unified/workbuddy_intl/accounts/foreign-user"
+        self.assertEqual((await self.client.post(path + "/refresh")).status_code, 403)
+        self.assertEqual((await self.client.post(path + "/balance", headers=self.csrf)).json()["remaining"], 25)
+        self.assertEqual((await self.client.post(path + "/refresh", headers=self.csrf)).status_code, 200)
+        self.assertEqual((await self.client.patch(path, headers=self.csrf, json={"enabled": False})).status_code, 200)
+        self.assertFalse(account["enabled"])
+        self.assertEqual((await self.client.delete(path, headers=self.csrf)).status_code, 200)
+        self.assertEqual((await self.client.patch("/admin/api/unified/workbuddy_intl/accounts/domestic-user", headers=self.csrf, json={"enabled": False})).status_code, 404)
+
+    async def test_old_auto_workbuddy_connection_migrates_out_of_custom_services(self):
+        path = Path(self.temp.name) / "connections.json"
+        path.write_text(json.dumps({"workbuddy": {"id": "workbuddy", "kind": "workbuddy_intl", "adapter": "hub", "key": "old"},
+                                    "personal": {"id": "personal", "kind": "openai", "key": "secret"}}), encoding="utf-8")
+        connections = Connections(path)
+        self.assertEqual([row["id"] for row in connections.rows()], ["personal"])
+        self.assertNotIn("workbuddy", json.loads(path.read_text(encoding="utf-8")))
 
     async def test_crud_persistence_validation_and_csrf(self):
         self.assertEqual((await self.client.post(self.path, json=self.body)).status_code, 403)
@@ -247,13 +300,47 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 400)
 
     async def test_unified_checkin_requires_csrf_and_aggregates_platforms(self):
+        async def no_workbuddy_accounts():
+            return []
+        self.app.state.workbuddy_login.accounts = no_workbuddy_accounts
         path = "/admin/api/unified/checkin"
         self.assertEqual((await self.client.post(path)).status_code, 403)
         response = await self.client.post(path, headers=self.csrf, json={})
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()
-        self.assertEqual([item["provider"] for item in result["providers"]], ["trae", "codebuddy", "monkeycode"])
+        self.assertEqual([item["provider"] for item in result["providers"]], ["trae", "codebuddy", "monkeycode", "qoder", "workbuddy_intl"])
         self.assertEqual(result["summary"], {"total": 1, "succeeded": 1, "failed": 0})
+
+    async def test_workbuddy_auto_checkin_skips_accounts_already_active_today(self):
+        today = time.strftime("%Y-%m-%d")
+        accounts = [
+            {"uid": "already", "realm": "intl", "enabled": True, "lastDailyChat": today + " 09:00"},
+            {"uid": "pending", "realm": "intl", "enabled": True, "lastDailyChat": None},
+            {"uid": "paused", "realm": "intl", "enabled": False, "lastDailyChat": None},
+            {"uid": "domestic", "realm": "cn", "enabled": True},
+        ]
+        activated = []
+
+        def hub(request):
+            if request.url.path == "/panel/login":
+                return httpx.Response(200, json={"token": "panel-session"})
+            if request.url.path == "/accounts":
+                return httpx.Response(200, json={"accounts": accounts})
+            if request.url.path == "/accounts/daily-chat":
+                uid = json.loads(request.content)["uid"]
+                activated.append(uid)
+                next(account for account in accounts if account["uid"] == uid)["lastDailyChat"] = today + " 10:00"
+                return httpx.Response(200, json={"results": [{"uid": uid, "ok": True, "msg": "每日活跃完成"}]})
+            return httpx.Response(404)
+
+        self.app.state.workbuddy_login.client_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(hub))
+        for _ in range(2):
+            response = await self.client.post("/admin/api/unified/checkin", headers=self.csrf, json={})
+            self.assertEqual(response.status_code, 200, response.text)
+            group = next(item for item in response.json()["providers"] if item["provider"] == "workbuddy_intl")
+            self.assertEqual(len(group["results"]), 2)
+            self.assertTrue(all(item["ok"] for item in group["results"]))
+        self.assertEqual(activated, ["pending"])
 
     async def test_per_account_trae_and_monkey_actions_require_csrf(self):
         cases = [

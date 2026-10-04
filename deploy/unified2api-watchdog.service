@@ -1,0 +1,9 @@
+[Unit]
+Description=Recover the Unified2API gateway if Docker cannot restart it
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/unified2api-watchdog
+TimeoutStartSec=120

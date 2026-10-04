@@ -2401,7 +2401,15 @@ def banned_model_message(model):
 
 
 def build_upstream_body(payload):
+    payload = dict(payload)
     model = payload.get("model") or ""
+    # OpenAI clients spell disabled reasoning as "off". WorkBuddy's
+    # DeepSeek rejects that value (11133); its accepted spelling is "none".
+    effort = payload.get("reasoning_effort") or payload.get("reasoningEffort")
+    if str(model).lower().startswith("deepseek") and str(effort or "").lower() == "off":
+        payload.pop("reasoningEffort", None)
+        payload["reasoning_effort"] = "none"
+        payload["thinking"] = {"type": "disabled"}
     # Resolve the effective thinking state before the backfill below: while
     # thinking is on, the upstream requires reasoning_content on every
     # assistant message, whether or not the client kept a reasoning trace.
@@ -2459,6 +2467,51 @@ def build_upstream_body(payload):
     if "stream_options" not in body:
         body["stream_options"] = {"include_usage": True}
     return body
+
+
+_parameter_metadata_lock = threading.Lock()
+
+
+def request_parameter_metadata(payload):
+    """Numeric sizes and known control values only; never message/tool text."""
+    row = {"time": int(time.time())}
+    for key in ("temperature", "top_p", "max_tokens", "max_completion_tokens",
+                "frequency_penalty", "presence_penalty", "parallel_tool_calls"):
+        value = payload.get(key)
+        if isinstance(value, (int, float, bool)):
+            row[key] = value
+    effort = payload.get("reasoning_effort") or payload.get("reasoningEffort")
+    if effort is not None:
+        row["reasoning_effort"] = effort if effort in ("off", "none", "low", "medium", "high", "max", "xhigh") else "other"
+    thinking = payload.get("thinking")
+    if isinstance(thinking, dict):
+        row["thinking"] = thinking.get("type") if thinking.get("type") in ("enabled", "disabled") else "other"
+    messages = [m for m in payload.get("messages", []) if isinstance(m, dict)]
+    row["messages"] = len(messages)
+    row["content_chars"] = sum(len(json.dumps(m.get("content"), ensure_ascii=False)) for m in messages)
+    row["assistant_messages"] = sum(m.get("role") == "assistant" for m in messages)
+    row["missing_reasoning"] = sum(m.get("role") == "assistant" and not isinstance(m.get("reasoning_content"), str) for m in messages)
+    row["tool_results"] = sum(m.get("role") == "tool" for m in messages)
+    row["tool_calls"] = sum(len(m.get("tool_calls") or []) for m in messages)
+    tools = payload.get("tools") or []
+    row["tools"] = len(tools)
+    row["tool_schema_chars"] = len(json.dumps(tools, ensure_ascii=False))
+    return row
+
+
+def record_parameter_error(payload, status):
+    if status != 400:
+        return
+    try:
+        row = request_parameter_metadata(payload)
+        with _parameter_metadata_lock:
+            os.makedirs(USAGE_DIR, exist_ok=True)
+            path = os.path.join(USAGE_DIR, "parameter_errors.jsonl")
+            mode = "w" if os.path.exists(path) and os.path.getsize(path) > 1024 * 1024 else "a"
+            with open(path, mode, encoding="utf-8") as handle:
+                handle.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
 
 
 def model_default_effort(model):
@@ -5575,6 +5628,7 @@ class Handler(BaseHTTPRequestHandler):
                          account=getattr(exc, "account_uid", None))
             return self._rate_limited(exc)
         except urllib.error.HTTPError as exc:
+            record_parameter_error(chat_req, exc.code)
             detail = exc.read(600).decode("utf-8", "replace")
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
@@ -5765,6 +5819,7 @@ class Handler(BaseHTTPRequestHandler):
                          account=getattr(exc, "account_uid", None))
             return self._rate_limited(exc)
         except urllib.error.HTTPError as exc:
+            record_parameter_error(payload, exc.code)
             detail = exc.read(600).decode("utf-8", "replace")
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
