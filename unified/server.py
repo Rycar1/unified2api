@@ -100,6 +100,8 @@ class API:
                 unavailable.append("workbuddy")
         if self.routes:
             models += self.routes.public_models()
+        from .model_metadata import enrich_model
+        models=[enrich_model(model) for model in models]
         if self.capabilities:
             models = [{**model,"capabilities":self.capabilities.describe(model)} for model in models]
             catalog = {model['id']:model['capabilities'] for model in models}
@@ -107,6 +109,17 @@ class API:
                 if model['id'].startswith('route/'):
                     targets = self.routes.get(model['id'].partition('/')[2])['targets']
                     model['capabilities'] = self.capabilities.route(model,targets,catalog)
+            for model in models:
+                capability=model['capabilities']
+                for field in ('context_window','max_output_tokens','reasoning','reasoning_efforts'):
+                    if capability.get(field) is not None:
+                        model[field]=capability[field]
+                if model.get('context_window'):
+                    model['context_length']=model['context_window']
+                if model.get('max_output_tokens'):
+                    model['max_completion_tokens']=model['max_output_tokens']
+                if model['id'].startswith('route/'):
+                    model['limits_source']='route-targets'
         return {"object": "list", "data": models, "unavailable_providers": unavailable}
 
     async def route_request(self, rid, scope, receive, send, data):

@@ -207,13 +207,16 @@ class QoderAccounts(QoderRelay):
             prefix = "qoder-cn/" if account.realm == "cn" else "qoder/"
             for row in rows:
                 key = row.get("key")
-                if not key or row.get("enable") is False:
+                if not key:
                     continue
                 mid = prefix + aliases[key]
-                result[mid] = {"id": mid, "object": "model",
+                fields={'name','display_name','description','name_local','context_config','thinking_config','price_factor','promotion','price_factor_peak','price_factor_valley','disabled_reason','disabled_message_key','is_free','is_new','enable','is_vl'}
+                entry = {**{key:value for key,value in row.items() if key in fields},"id": mid, "object": "model",
                     "owned_by": "qoder_cn" if account.realm == "cn" else "qoder", "region": account.realm,
                     "vision": row.get("is_vl") if type(row.get("is_vl")) is bool else None, "reasoning": bool(row.get("is_reasoning")),
                     "catalog_source": "live" if cached else "snapshot"}
+                if mid not in result or row.get('enable') is not False:
+                    result[mid]=entry
         return list(result.values())
 
     async def operate(self, aid, action):

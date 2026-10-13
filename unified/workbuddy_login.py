@@ -100,7 +100,9 @@ class WorkBuddyLogin:
         items = data.get("data")
         if not isinstance(items, list):
             raise HTTPException(502, "WorkBuddy 模型列表格式无效")
-        return [{"id": "workbuddy/" + item["id"], "object": "model", "owned_by": "workbuddy",
+        fields={'name','description','vision','tools','reasoning','reasoning_efforts','default_reasoning_effort','context_window','context_length','max_output_tokens','max_completion_tokens','input_modalities','available','disabled_reason','price_factor'}
+        return [{**{key:value for key,value in item.items() if key in fields},
+                 "id": "workbuddy/" + item["id"], "object": "model", "owned_by": "workbuddy",
                  "provider_name": "WorkBuddy AI 国外"}
                 for item in items if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
 

@@ -6,7 +6,7 @@ import time
 from fastapi import HTTPException
 
 PROTOCOL_VALUES = {'native','converted','supported','unsupported','unknown'}
-FIELDS = {'vision','tools','compact','context_window','protocols'}
+FIELDS = {'vision','tools','compact','context_window','max_output_tokens','reasoning','reasoning_efforts','protocols'}
 
 
 class ModelCapabilities:
@@ -23,13 +23,17 @@ class ModelCapabilities:
                      'messages':'converted' if converted and prefix!='workbuddy' else 'unsupported'}
         result = {'vision':None,'tools':None,'context_window':None,'compact':False if converted or chat_only else None,
                   'protocols':protocols,'sources':{'protocols':'gateway','compact':'gateway' if converted or chat_only else 'unknown'}}
-        for field in ('vision','tools'):
+        for field in ('vision','tools','reasoning'):
             if type(row.get(field)) is bool:
                 result[field] = row[field]
                 result['sources'][field] = row.get('catalog_source','catalog')
-        if type(row.get('context_window')) is int and row['context_window']>0:
-            result['context_window'] = row['context_window']
-            result['sources']['context_window'] = row.get('catalog_source','catalog')
+        for field in ('context_window','max_output_tokens'):
+            result.setdefault(field,None)
+            if type(row.get(field)) is int and row[field]>0:
+                result[field] = row[field]
+                result['sources'][field] = row.get('limits_source',row.get('catalog_source','catalog'))
+        result.setdefault('reasoning',None)
+        result['reasoning_efforts'] = list(row.get('reasoning_efforts') or [])
         for name,source in [('detected_capabilities','probe'),('model_capabilities','manual')]:
             saved = self.config.get(name,{}).get(row['id'],{})
             for field in FIELDS:
@@ -43,12 +47,16 @@ class ModelCapabilities:
     def save(self,model,body):
         if not isinstance(body,dict) or set(body)-FIELDS:
             raise HTTPException(400,'模型能力包含不支持的字段')
-        for field in ('vision','tools','compact'):
+        for field in ('vision','tools','compact','reasoning'):
             if field in body and body[field] is not None and type(body[field]) is not bool:
                 raise HTTPException(400,'能力状态应为支持、不支持或未知')
-        value = body.get('context_window')
-        if value is not None and (type(value) is not int or not 1<=value<=10**8):
-            raise HTTPException(400,'上下文长度必须是正整数或未知')
+        for field in ('context_window','max_output_tokens'):
+            value = body.get(field)
+            if value is not None and (type(value) is not int or not 1<=value<=10**8):
+                raise HTTPException(400,'Token 上限必须是正整数或未知')
+        efforts=body.get('reasoning_efforts',[])
+        if not isinstance(efforts,list) or len(efforts)>12 or any(not isinstance(item,str) or not item or len(item)>24 for item in efforts):
+            raise HTTPException(400,'思考档位格式无效')
         protocols = body.get('protocols',{})
         if model.startswith('route/'):
             raise HTTPException(400,'路由能力由目标决定，请修改目标模型的能力标记')
@@ -78,8 +86,14 @@ class ModelCapabilities:
         for field in ('vision','tools'):
             values = [child.get(field) for child in children]
             result[field] = True if values and all(value is True for value in values) else False if False in values else None
-        windows = [child.get('context_window') for child in children]
-        result['context_window'] = min(windows) if windows and all(windows) else None
+        for field in ('context_window','max_output_tokens'):
+            limits = [child.get(field) for child in children]
+            result[field] = min(limits) if limits and all(limits) else None
+        reasoning=[child.get('reasoning') for child in children]
+        result['reasoning']=True if reasoning and all(value is True for value in reasoning) else False if reasoning and all(value is False for value in reasoning) else None
+        efforts=[set(child.get('reasoning_efforts') or []) for child in children]
+        common=set.intersection(*efforts) if efforts else set()
+        result['reasoning_efforts']=[item for item in ('minimal','low','medium','high','xhigh','max') if item in common]
         result['sources'] = {field:'route targets' for field in FIELDS}
         return result
 
