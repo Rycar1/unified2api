@@ -8,6 +8,7 @@ import {
   WalletCards, X,
 } from 'lucide-react'
 import './styles.css'
+import { CapabilityBadges, KeyLimitsDialog, RequestDetailsDialog, ModelCapabilitiesDialog, ReleasesPage } from './controls'
 
 const pageMeta = {
   overview: ['概览', '服务状态和常用入口'],
@@ -21,13 +22,14 @@ const pageMeta = {
   automation: ['自动任务', '定时签到、刷新余额和发送告警'],
   backup: ['备份恢复', '导出或恢复加密的完整服务数据'],
   usage: ['用量统计', '查看每日、每周和累计 Token 消耗'],
+  releases: ['版本管理', '检查更新、升级和回滚'],
   settings: ['设置', '调整外观、统计保留时间和自动刷新'],
 }
 
 const navGroups = [
   { label: '工作台', items: [['overview', CircleGauge], ['accounts', Users], ['connections', Server], ['models', Bot]] },
   { label: '开发', items: [['keys', KeyRound], ['test', FlaskConical], ['routes', Network]] },
-  { label: '运维', items: [['usage', Activity], ['logs', FileText], ['automation', Clock], ['backup', Archive]] },
+  { label: '运维', items: [['usage', Activity], ['logs', FileText], ['automation', Clock], ['backup', Archive], ['releases', Download]] },
 ]
 
 const accountProviders = [['trae','TRAE'],['codebuddy','CodeBuddy 国内'],['workbuddy_intl','WorkBuddy AI 国外'],['monkeycode','MonkeyCode'],['qoder','Qoder']]
@@ -538,8 +540,9 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
   </section>
 }
 
-function Models({ data, onNavigate }) {
+function Models({ data, onNavigate, csrf, onRefresh }) {
   const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState(null)
   const [prefix, setPrefix] = useState('')
   const models = data?.models || []
   const groups = useMemo(() => {
@@ -563,11 +566,13 @@ function Models({ data, onNavigate }) {
     <div className="filter-tabs model-filters" role="group" aria-label="模型前缀分类">
       {[{ id: '', label: '全部', count: models.length }, ...groups].map(group => <button type="button" key={group.id} aria-pressed={prefix === group.id} className={prefix === group.id ? 'active' : ''} onClick={() => setPrefix(group.id)}>{group.label}<span className="model-filter-count">{group.count}</span></button>)}
     </div>
-    <DataTable columns={['模型','来源','兼容接口','']} empty={!rows.length && '没有匹配的模型'}>{rows.map(model => <tr key={model.id}><td>{model.name && !['qoder','qoder_cn'].includes(model.owned_by) && <strong>{model.name}</strong>}<code>{model.id}</code>{model.catalog_source === 'snapshot' && <small className="muted">官方快照，刷新账号后同步实时目录</small>}</td><td><span className="provider-badge">{providerName(model.owned_by)}</span></td><td className="muted">{['codebuddy','qoder','qoder_cn'].includes(model.owned_by) ? 'Chat · Responses · Messages' : model.owned_by === 'workbuddy' ? 'Chat · Responses' : 'Chat Completions'}</td><td><button className="link-button" onClick={() => onNavigate('test')}>测试</button></td></tr>)}</DataTable>
+    <DataTable columns={['模型','来源','模型能力','操作']} empty={!rows.length && '没有匹配的模型'}>{rows.map(model => <tr key={model.id}><td><code>{model.id}</code>{model.catalog_source === 'snapshot' && <small className="muted">官方目录快照</small>}</td><td><span className="provider-badge">{providerName(model.owned_by)}</span></td><td><CapabilityBadges capabilities={model.capabilities}/></td><td><div className="head-actions"><button className="link-button" aria-label={`模型能力 ${model.id}`} onClick={() => setSelected(model)}>能力</button><button className="link-button" onClick={() => onNavigate('test')}>测试</button></div></td></tr>)}</DataTable>
+    {selected && <ModelCapabilitiesDialog model={selected} request={request} Modal={Modal} csrf={csrf} onClose={() => setSelected(null)} onSaved={onRefresh}/>}
+
   </section>
 }
 
-function KeyRowActions({ apiKey, csrf, onRefresh, onFeedback }) {
+function KeyRowActions({ apiKey, csrf, onRefresh, onFeedback, onLimits }) {
   const [more, setMore] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(apiKey.name)
@@ -632,6 +637,7 @@ function KeyRowActions({ apiKey, csrf, onRefresh, onFeedback }) {
     <button ref={moreButton} className={`dots-action ${more ? 'active' : ''}`} onClick={toggleMore} aria-label={`管理密钥 ${apiKey.name}`} aria-expanded={more} aria-haspopup="menu" disabled={busy}>•••</button>
     {more && createPortal(<div ref={menu} className="account-popover" style={menuPosition} role="menu">
       <button role="menuitem" onClick={() => { setMore(false); setName(apiKey.name); setError(''); setRenaming(true) }}>重命名</button>
+      <button role="menuitem" onClick={() => { setMore(false); onLimits(apiKey) }}>用量限制</button>
       <button role="menuitem" className="danger-text" onClick={remove}>撤销密钥</button>
     </div>, document.body)}
     {renaming && createPortal(<Modal title="重命名密钥" subtitle="客户端访问" onClose={() => setRenaming(false)}>
@@ -645,10 +651,12 @@ function KeyRowActions({ apiKey, csrf, onRefresh, onFeedback }) {
 
 function Keys({ data, csrf, onRefresh, onAdd }) {
   const [feedback, setFeedback] = useState(null)
+  const [selected, setSelected] = useState(null)
   const rows = data?.keys || []
   return <section className="content-card"><div className="section-head"><div><span className="section-label">访问控制</span><h2>API 密钥</h2></div><button className="button primary" onClick={onAdd}><Plus size={15}/>创建密钥</button></div>
     {feedback && <div className={`result-banner ${feedback.error ? 'error' : ''}`} role="status">{feedback.message}</div>}
-    <DataTable columns={['名称','前缀','创建时间','操作']} empty={!rows.length && '暂未创建 API 密钥'}>{rows.map(k => <tr key={k.id}><td><strong>{k.name}</strong></td><td><code>{k.hint || (k.prefix ? `${k.prefix}…` : '已隐藏')}</code></td><td className="muted">{k.created ? new Date(k.created * 1000).toLocaleDateString('zh-CN') : '—'}</td><td className="row-menu"><KeyRowActions apiKey={k} csrf={csrf} onRefresh={onRefresh} onFeedback={(message, error) => setFeedback({ message, error })}/></td></tr>)}</DataTable>
+    <DataTable columns={['名称','前缀','今日 Token','创建时间','操作']} empty={!rows.length && '暂未创建 API 密钥'}>{rows.map(k => <tr key={k.id}><td><strong>{k.name}</strong></td><td><code>{k.hint || (k.prefix ? `${k.prefix}…` : '已隐藏')}</code></td><td><strong title={`${k.usage?.day_tokens || 0} Token`}>{tokenText(k.usage?.day_tokens)}</strong><small>{k.policy?.daily_tokens ? `上限 ${tokenText(k.policy.daily_tokens)}` : '未设上限'}</small>{k.policy?.enabled === false && <small className="danger-text">已暂停</small>}</td><td className="muted">{k.created ? new Date(k.created * 1000).toLocaleDateString('zh-CN') : '—'}</td><td className="row-menu"><KeyRowActions apiKey={k} csrf={csrf} onLimits={setSelected} onRefresh={onRefresh} onFeedback={(message, error) => setFeedback({ message, error })}/></td></tr>)}</DataTable>
+    {selected && <KeyLimitsDialog apiKey={selected} models={data?.models || []} request={request} Modal={Modal} csrf={csrf} onClose={() => setSelected(null)} onSaved={async () => { await onRefresh(); setSelected(null); setFeedback({message:'密钥限制已保存',error:false}) }}/>}
   </section>
 }
 
@@ -659,8 +667,9 @@ function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
   const [form, setForm] = useState(() => initialRoute ? {
     id: initialRoute.id, name: initialRoute.name, strategy: initialRoute.strategy,
     retries: initialRoute.retries, cooldown_seconds: initialRoute.cooldown_seconds,
+    max_concurrency: initialRoute.max_concurrency || 8, max_account_concurrency: initialRoute.max_account_concurrency || 2,
     targets: [...initialRoute.targets], enabled: initialRoute.enabled !== false,
-  } : { id: '', name: '', strategy: 'priority', retries: 2, cooldown_seconds: 300, targets: [], enabled: true })
+  } : { id: '', name: '', strategy: 'priority', retries: 2, cooldown_seconds: 300, targets: [], enabled: true, max_concurrency: 8, max_account_concurrency: 2 })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const update = (key, value) => setForm(current => ({ ...current, [key]: value }))
@@ -686,7 +695,8 @@ function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
   return <Modal title={initialRoute ? '编辑智能路由' : '创建智能路由'} subtitle="模型故障转移" onClose={onClose}><form onSubmit={save}>
     <div className="field-grid"><div><label>路由名称</label><input required maxLength="60" value={form.name} onChange={e => update('name', e.target.value)} placeholder="例如：稳定编程模型"/></div><div><label>调用前缀</label><input required readOnly={Boolean(initialRoute)} pattern="[a-z][a-z0-9_.-]{0,39}" title="小写字母开头，可包含数字、点号、下划线和短横线" value={form.id} onChange={e => update('id', e.target.value)} placeholder="glm-5.3"/></div></div>
     {initialRoute && <p className="field-help">调用前缀保持不变，现有客户端可以继续使用 <code>route/{form.id}</code>。</p>}
-    <div className="field-grid"><div><label>选择策略</label><select value={form.strategy} onChange={e => update('strategy', e.target.value)}><option value="priority">按顺序优先</option><option value="round_robin">轮询分配</option><option value="latency">优先低延迟</option></select></div><div><label>失败后最多切换</label><input type="number" min="0" max="10" value={form.retries} onChange={e => update('retries', Number(e.target.value))}/></div></div>
+    <div className="field-grid"><div><label>选择策略</label><select value={form.strategy} onChange={e => update('strategy', e.target.value)}><option value="priority">按顺序优先</option><option value="round_robin">轮询分配</option><option value="latency">优先低延迟</option><option value="smart">自适应：余额、并发与健康</option></select></div><div><label>失败后最多切换</label><input type="number" min="0" max="10" value={form.retries} onChange={e => update('retries', Number(e.target.value))}/></div></div>
+    {form.strategy === 'smart' && <><div className="field-grid"><div><label htmlFor="route-concurrency">每个目标的并发上限</label><input id="route-concurrency" type="number" min="1" max="1000" value={form.max_concurrency} onChange={event => update('max_concurrency',Number(event.target.value))}/></div><div><label htmlFor="route-account-concurrency">每个账号的并发上限</label><input id="route-account-concurrency" type="number" min="1" max="100" value={form.max_account_concurrency} onChange={event => update('max_account_concurrency',Number(event.target.value))}/></div></div><p className="field-help">跳过额度已耗尽、冷却或并发已满的目标；结合近期成功率与首响应速度分配。不同平台的积分不会直接比较。</p></>}
     <label>失败冷却时间（秒）</label><input type="number" min="10" max="86400" value={form.cooldown_seconds} onChange={e => update('cooldown_seconds', Number(e.target.value))}/>
     <label htmlFor="route-model-search">目标模型（按选择顺序）</label>
     <div className="model-picker-search"><Search size={15}/><input id="route-model-search" type="search" value={modelQuery} onChange={event => setModelQuery(event.target.value)} placeholder="输入模型名称快速筛选" autoComplete="off"/></div>
@@ -711,7 +721,7 @@ function Routes({ data, csrf, onRefresh, onAdd, onEdit }) {
     <section className="content-card"><div className="section-head"><div><span className="section-label">统一入口</span><h2>智能路由</h2><p className="muted">为多个真实模型创建一个稳定别名，并在失败时自动切换。</p></div><button className="button primary" onClick={onAdd}><Plus size={15}/>创建路由</button></div>
       <DataTable columns={['路由','策略','目标模型','健康状态','']} empty={!rows.length && '暂未创建智能路由'}>{rows.map(route => {
         const cooling = Object.values(route.health || {}).filter(item => item.cooldown_until * 1000 > Date.now()).length
-        return <tr key={route.id}><td><strong>{route.name}</strong><small><code>route/{route.id}</code></small></td><td>{({priority:'顺序优先',round_robin:'轮询',latency:'低延迟'}[route.strategy])}</td><td><strong>{route.targets.length} 个</strong><small>{route.targets.join(' → ')}</small></td><td><StatusBadge status={route.enabled === false ? 'paused' : cooling ? 'cooling' : 'ready'}/><small>{route.enabled === false ? '路由已停用' : cooling ? `${cooling} 个目标冷却中` : '全部可参与路由'}</small></td><td className="row-menu"><div className="route-row-actions"><button type="button" onClick={() => onEdit(route)} aria-label={`编辑路由 ${route.name}`} title="编辑路由"><Pencil size={14}/></button><button type="button" className="danger-icon" onClick={() => remove(route.id)} aria-label={`删除路由 ${route.name}`} title="删除路由"><Trash2 size={14}/></button></div></td></tr>
+        return <tr key={route.id}><td><strong>{route.name}</strong><small><code>route/{route.id}</code></small></td><td>{({priority:'顺序优先',round_robin:'轮询',latency:'低延迟',smart:'自适应'}[route.strategy])}</td><td><strong>{route.targets.length} 个</strong><small>{route.targets.join(' → ')}</small></td><td><StatusBadge status={route.enabled === false ? 'paused' : cooling ? 'cooling' : 'ready'}/><small>{route.enabled === false ? '路由已停用' : cooling ? `${cooling} 个目标冷却中` : '全部可参与路由'}</small></td><td className="row-menu"><div className="route-row-actions"><button type="button" onClick={() => onEdit(route)} aria-label={`编辑路由 ${route.name}`} title="编辑路由"><Pencil size={14}/></button><button type="button" className="danger-icon" onClick={() => remove(route.id)} aria-label={`删除路由 ${route.name}`} title="删除路由"><Trash2 size={14}/></button></div></td></tr>
       })}</DataTable>
     </section>
   </div>
@@ -721,9 +731,11 @@ function Logs({ csrf }) {
   const [state, setState] = useState({ items: [], total: 0, summary: {} })
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [error, setError] = useState('')
   async function load() {
     setLoading(true)
-    try { setState(await request(`unified/logs?limit=100&model=${encodeURIComponent(filter)}`)) } finally { setLoading(false) }
+    try { setState(await request(`unified/logs?limit=100&model=${encodeURIComponent(filter)}`)) } catch (err) { setError(err.message) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
   async function clear() {
@@ -736,8 +748,11 @@ function Logs({ csrf }) {
       {[['24 小时请求', summary.count || 0], ['成功率', summary.success_rate == null ? '—' : `${summary.success_rate}%`], ['平均耗时', summary.avg_duration_ms ? `${Math.round(summary.avg_duration_ms)} ms` : '—'], ['推理 Token', (summary.reasoning_tokens || 0).toLocaleString()]].map(([label,value]) => <article className="summary-card" key={label}><div><strong>{value}</strong><span>{label}</span></div></article>)}
     </section>
     <section className="content-card"><div className="section-head"><div><span className="section-label">最近 90 天</span><h2>调用记录</h2><p className="muted">不保存提示词、回复正文或密钥。</p></div><div className="head-actions"><button className="button secondary" onClick={clear}><Trash2 size={14}/>清空</button><button className="button secondary" onClick={load}><RefreshCw size={14} className={loading ? 'spin' : ''}/>刷新</button></div></div>
-      <div className="toolbar"><label className="search-box"><Search size={15}/><input value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()} placeholder="筛选模型"/></label><span className="muted">共 {state.total || 0} 条</span></div>
-      <DataTable columns={['时间','模型','实际目标','结果','耗时','Token']} empty={!state.items.length && '暂无调用记录'}>{state.items.map(item => <tr key={item.id}><td className="muted">{new Date(item.created * 1000).toLocaleString('zh-CN')}</td><td><code>{item.model || '—'}</code></td><td><small>{item.resolved_model || '—'}</small></td><td><StatusBadge status={item.ok ? 'ready' : 'error'}/><small>{item.status || item.outcome}</small></td><td className="tabular">{item.duration_ms.toLocaleString()} ms</td><td><strong>{(item.prompt_tokens + item.completion_tokens).toLocaleString()}</strong><small>推理 {item.reasoning_tokens.toLocaleString()}</small></td></tr>)}</DataTable>
+      <div className="toolbar"><label className="search-box"><Search size={15}/><input value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()} placeholder="模型或请求 ID"/></label><span className="muted">共 {state.total || 0} 条</span></div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <DataTable columns={['时间','模型','实际目标与账号','结果','首响应 / 总耗时','Token','操作']} empty={!state.items.length && '暂无调用记录'}>{state.items.map(item => <tr key={item.id}><td className="muted">{new Date(item.created * 1000).toLocaleString('zh-CN')}</td><td><code>{item.model || '—'}</code></td><td><small>{item.resolved_model || '—'}</small><small className="muted">{item.account_name || item.account_id || ''}</small></td><td><StatusBadge status={item.ok ? 'ready' : 'error'}/><small>{item.status || item.outcome}</small></td><td className="tabular">{item.ttft_ms == null ? '—' : `${item.ttft_ms.toLocaleString()} ms`}<small className="muted">总计 {item.duration_ms.toLocaleString()} ms</small></td><td><strong>{(item.prompt_tokens + item.completion_tokens).toLocaleString()}</strong></td><td>{item.request_id ? <button className="link-button" aria-label={`诊断 ${item.request_id}`} onClick={() => setSelected(item.request_id)}>诊断{item.attempt_count > 1 ? ` · ${item.attempt_count} 次尝试` : ''}</button> : <small className="muted">历史记录</small>}</td></tr>)}</DataTable>
+      {selected && <RequestDetailsDialog requestId={selected} request={request} Modal={Modal} onClose={() => setSelected(null)}/>}
+
     </section>
   </div>
 }
@@ -927,6 +942,7 @@ function SettingsPage({ settings, theme, onThemeChange, onSave, onNavigate }) {
       <label htmlFor="auto-refresh">自动刷新间隔</label><select id="auto-refresh" value={form.auto_refresh_seconds || 0} onChange={e => setForm(current => ({ ...current, auto_refresh_seconds: Number(e.target.value) }))}><option value="0">关闭</option><option value="30">30 秒</option><option value="60">1 分钟</option><option value="300">5 分钟</option></select><p className="settings-copy muted">开启后，控制台会按间隔刷新账号状态和统计数据。</p>
       <button className="button primary wide" disabled={busy}><Save size={15}/>{busy ? '正在保存…' : '保存设置'}</button>{message && <div className={`result-banner settings-message ${message !== '设置已保存' ? 'error' : ''}`}>{message}</div>}
     </form>
+    <section className="content-card settings-wide"><span className="section-label">版本管理</span><h2>升级与回滚</h2><p className="muted settings-copy">检查仓库新版本，保留现有账号和密钥进行升级。新版本健康检查失败自动恢复。</p><button className="button secondary" type="button" onClick={() => onNavigate('releases')}><Download size={14}/>管理版本</button></section>
     <section className="content-card settings-wide"><span className="section-label">数据说明</span><h2>Token 统计如何计算</h2><p className="muted settings-copy">统计从每次 API 返回的 usage 字段读取输入和输出 Token。更换保留时间后，超出范围的历史统计会清理；已清理的数据无法恢复。累计数字表示当前保留范围内的用量。</p><button className="button secondary" type="button" onClick={() => onNavigate('logs')}><FileText size={14}/>查看调用记录</button></section>
   </div>
 }
@@ -1078,7 +1094,7 @@ function App() {
     overview: <Overview data={data} onNavigate={navigate}/>,
     accounts: <Accounts data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('account')}/>,
     connections: <Connections data={data} csrf={csrf} onRefresh={load} onAdd={() => { setEditingConnection(null); setDialog('connection') }} onEdit={connection => { setEditingConnection(connection); setDialog('connection') }}/>,
-    models: <Models data={data} onNavigate={navigate}/>,
+    models: <Models data={data} onNavigate={navigate} csrf={csrf} onRefresh={load}/>,
     keys: <Keys data={data} csrf={csrf} onRefresh={load} onAdd={() => setDialog('key')}/>,
     test: <TestPanel data={data} csrf={csrf}/>,
     routes: <Routes data={data} csrf={csrf} onRefresh={load} onAdd={() => { setEditingRoute(null); setDialog('route') }} onEdit={route => { setEditingRoute(route); setDialog('route') }}/>,
@@ -1086,6 +1102,7 @@ function App() {
     automation: <Automation data={data} csrf={csrf} onRefresh={load}/>,
     backup: <Backup csrf={csrf}/>,
     usage: <Usage settings={consoleSettings} refreshNonce={refreshNonce}/>,
+    releases: <ReleasesPage request={request} csrf={csrf}/>,
     settings: <SettingsPage settings={consoleSettings} theme={theme} onThemeChange={setTheme} onSave={saveConsoleSettings} onNavigate={navigate}/>,
   }
   const content = pages[page]
