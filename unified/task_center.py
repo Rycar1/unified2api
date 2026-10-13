@@ -96,7 +96,7 @@ class TaskCenter:
             result=metadata(result)
             result['message']=result.get('message') or result.get('msg') or '；'.join(result.get('logs',[])[-2:]) or '操作已执行'
             result.setdefault('state','completed' if result.get('ok') else 'failed')
-            self.record(provider,aid,action,result)
+            if not result.pop('_history_recorded',False): self.record(provider,aid,action,result)
             return result
 
     def record(self,provider,aid,action,result):

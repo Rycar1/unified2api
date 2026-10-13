@@ -50,6 +50,9 @@ class WebActivityTests(unittest.TestCase):
         second=self.activity.run(self.account)
         self.assertTrue(first['ok'])
         self.assertTrue(second['already'])
+        self.assertEqual(len(state['activity_history']),1)
+        self.assertEqual(state['activity_history'][0]['action'],'daily_activity')
+        self.assertNotIn('secret',str(state['activity_history']))
 
     def test_completed_session_is_not_repeated_when_balance_refresh_fails(self):
         state={}

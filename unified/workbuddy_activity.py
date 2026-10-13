@@ -39,6 +39,16 @@ class WebActivity:
         self.config,self.runner=config,runner
         self.locks={}; self.state_lock=threading.RLock()
 
+    def record(self,account,result):
+        lock=getattr(getattr(self.config,'store',None),'lock',self.state_lock)
+        with lock:
+            history=self.config.get('activity_history',[])
+            row={'provider':'workbuddy_intl','account_id':account.uid,'action':'daily_activity',
+                'created':int(time.time()),**{key:result.get(key) for key in ('ok','state','remaining','earned_credit','message')}}
+            self.config.set('activity_history',(history+[row])[-1000:])
+        result['_history_recorded']=True
+        return result
+
     def request(self,account,path,body=None):
         import wb_accounts
         import urllib.request
@@ -102,9 +112,9 @@ class WebActivity:
                 except Exception:
                     result['balance_stale']=True
                     result['message']='网页活跃已完成，余额刷新暂时失败，请稍后查询'
-                return result
+                return self.record(account,result)
             except Exception as exc:
-                return {'ok':False,'state':'failed','message':safe_error_message(str(exc),502,(account.access_token,token,getattr(account,'refresh_token','')))}
+                return self.record(account,{'ok':False,'state':'failed','message':safe_error_message(str(exc),502,(account.access_token,token,getattr(account,'refresh_token','')))})
 
     def install(self,proxy):
         import wb_accounts
