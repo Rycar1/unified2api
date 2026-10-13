@@ -2761,7 +2761,7 @@ def parse_rate_limit_reset(detail):
         return None
 
 
-def open_upstream(payload, session_key=None, target_realm=None):
+def open_upstream(payload, session_key=None, target_realm=None, target_uid=None):
     realm = target_realm or detect_model_realm(payload.get("model")) or CURRENT_REALM
     model = str(payload.get("model") or "")
     upstream_body = build_upstream_body(payload)
@@ -2783,8 +2783,10 @@ def open_upstream(payload, session_key=None, target_realm=None):
     transient_hits = 0
     max_attempts = max(2, total) + 1 + (MAX_PRODUCT_SWITCHES if AUTO_SWITCH_PRODUCT else 0)
     for _attempt in range(max_attempts):
-        account = POOL.pick_for_session(realm=realm, session_key=session_key,
-                                        exclude=tried, model=model) if POOL else None
+        account = (POOL.get(target_uid) if target_uid else POOL.pick_for_session(realm=realm, session_key=session_key,
+                                        exclude=tried, model=model)) if POOL else None
+        if target_uid and account and (account.uid in tried or not account.enabled or account.realm!=realm or not account.ready(model=model)):
+            account = None
         if account is None:
             if transient_hits and _attempt < max_attempts - 1:
                 tried.clear()
@@ -4204,6 +4206,8 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
+        if os.environ.get("WORKBUDDY_EMBEDDED") == "true" and getattr(self, "_unified_account", None):
+            self.send_header("X-Unified-Account", self._unified_account)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         # self.path is unset when parse_request() never ran (an over-long
@@ -5615,7 +5619,8 @@ class Handler(BaseHTTPRequestHandler):
             banned = self._banned_model_error(chat_req.get("model"))
             if banned:
                 return self._error(400, banned, "invalid_request_error")
-            upstream, account = open_upstream(chat_req, session_key=session_key, target_realm=req_realm)
+            upstream, account = open_upstream(chat_req, session_key=session_key, target_realm=req_realm,
+                target_uid=self.headers.get("X-Unified-Account-Uid") if os.getenv("WORKBUDDY_EMBEDDED")=="true" else None)
         except ContentRejected as exc:
             record_error(model, 403, exc.detail[:200],
                          elapsed_ms=int((time.time() - t_start) * 1000),
@@ -5653,6 +5658,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _responses_stream_response(self, upstream, model, custom_names, request_meta, fp, account, t_start, namespace_map=None, base_body=None, session_key=None, realm=None):
         self.send_response(200)
+        if os.environ.get("WORKBUDDY_EMBEDDED") == "true":
+            self.send_header("X-Unified-Account", account.uid)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
@@ -5702,6 +5709,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def _responses_nonstream_response(self, upstream, model, custom_names, request_meta, fp, account, t_start, namespace_map=None):
+        self._unified_account = account.uid
         try:
             chat_obj = aggregate_stream(upstream, model, None)
         except Exception as exc:
@@ -5716,6 +5724,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(200, result)
 
     def do_POST(self):
+        self._unified_account = None
         path = self.path.split("?")[0]
         if path == "/settings/save":
             if not self._panel_ok():
@@ -5806,7 +5815,8 @@ class Handler(BaseHTTPRequestHandler):
             banned = self._banned_model_error(payload.get("model"))
             if banned:
                 return self._error(400, banned, "invalid_request_error")
-            upstream, account = open_upstream(payload, session_key=session_key, target_realm=req_realm)
+            upstream, account = open_upstream(payload, session_key=session_key, target_realm=req_realm,
+                target_uid=self.headers.get("X-Unified-Account-Uid") if os.getenv("WORKBUDDY_EMBEDDED")=="true" else None)
         except ContentRejected as exc:
             record_error(model, 403, exc.detail[:200],
                          elapsed_ms=int((time.time() - t_start) * 1000),
@@ -5844,6 +5854,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _chat_stream_response(self, upstream, model, fp, account, t_start):
             self.send_response(200)
+            if os.getenv("WORKBUDDY_EMBEDDED")=="true":
+                self.send_header("X-Unified-Account",account.uid)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
@@ -5930,6 +5942,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
     def _chat_nonstream_response(self, upstream, model, fp, account, t_start):
+        self._unified_account = account.uid
         try:
             result = aggregate_stream(upstream, model, None)
         except Exception as exc:

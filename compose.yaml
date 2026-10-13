@@ -1,7 +1,10 @@
 name: unified2api
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        UNIFIED_RELEASE_REVISION: ${UNIFIED_RELEASE_REVISION:-dev}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -25,12 +28,14 @@ services:
       WORKBUDDY_ACCOUNTS_DIR: /data/workbuddy/accounts
       WORKBUDDY_USAGE_DIR: /data/workbuddy/usage
       TZ: Asia/Shanghai
+      UNIFIED_UPDATE_REPOSITORY: Rycar1/unified2api
     volumes:
       - trae-auth:/app/auths
       - trae-data:/app/trae-data
       - buddy-data:/data
       - hub-accounts:/data/workbuddy/accounts
       - hub-usage:/data/workbuddy/usage
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
       interval: 30s

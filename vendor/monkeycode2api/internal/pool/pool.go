@@ -36,6 +36,7 @@ type Status struct {
 	Reason          string    `json:"reason,omitempty"`
 	Disabled        bool      `json:"disabled"`
 	ErrCount        int       `json:"err_count,omitempty"`
+	InFlight        int       `json:"in_flight"`
 }
 
 type entry struct {
@@ -44,6 +45,7 @@ type entry struct {
 	reason   string
 	until    time.Time
 	errCount int
+	inFlight int
 }
 
 func (e *entry) healthy(now time.Time) bool {
@@ -174,6 +176,39 @@ func (p *Pool) PickExcluding(exclude map[string]bool) *cred.Account {
 	return best.c
 }
 
+// PickReserved atomically selects a healthy account with an available slot.
+func (p *Pool) PickReserved(exclude map[string]bool, limit int) *cred.Account {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var best *entry
+	for _, e := range p.order {
+		if exclude[e.c.UID] || !e.healthy(time.Now()) || e.inFlight >= limit {
+			continue
+		}
+		wallet := e.c.Wallet
+		if wallet.DailyTokenLimit > 0 && wallet.DailyTokenBalance <= 0 && wallet.Balance <= 0 {
+			continue
+		}
+		if best == nil || e.inFlight < best.inFlight ||
+			(e.inFlight == best.inFlight && wallet.DailyTokenBalance > best.c.Wallet.DailyTokenBalance) {
+			best = e
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	best.inFlight++
+	return best.c
+}
+
+func (p *Pool) Release(uid string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e := p.byUID[uid]; e != nil && e.inFlight > 0 {
+		e.inFlight--
+	}
+}
+
 // Disable 永久禁用某账号。
 // 在释放写锁后再持久化，避免与 SaveState（RLock）竞争写锁。
 func (p *Pool) Disable(uid, reason string) {
@@ -269,6 +304,7 @@ func (p *Pool) List() []Status {
 			DailyTokenLimit: e.c.Wallet.DailyTokenLimit,
 			Disabled:        e.disabled,
 			ErrCount:        e.errCount,
+			InFlight:        e.inFlight,
 		}
 		if e.disabled {
 			s.Reason = e.reason

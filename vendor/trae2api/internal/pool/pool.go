@@ -486,6 +486,42 @@ func (p *Pool) PickWorkExcluding(tried map[string]bool) *auth.Auth {
 	return best.a
 }
 
+// PickReserved atomically selects and reserves a smart-route account.
+// Saturated accounts are never used as a fallback for this strategy.
+func (p *Pool) PickReserved(tried map[string]bool, limit int, work bool) *auth.Auth {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	var best *entry
+	for uid, e := range p.byUID {
+		if tried[uid] || e.inFlight >= limit {
+			continue
+		}
+		healthy := e.healthy(now)
+		if work {
+			healthy = e.healthyWork(now)
+		} else if e.creditsKnown && e.credits <= 0 {
+			healthy = false
+		}
+		if !healthy {
+			continue
+		}
+		greaterBalance := best != nil && e.credits > best.credits
+		if work && best != nil {
+			greaterBalance = e.workCredits > best.workCredits
+		}
+		if best == nil || e.inFlight < best.inFlight || (e.inFlight == best.inFlight && greaterBalance) {
+			best = e
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	best.inFlight++
+	best.lastUsed = now
+	return best.a
+}
+
 // PickWorkAffinity 针对 Work 通道实现会话粘性调度。
 func (p *Pool) PickWorkAffinity(sessionKey string, tried map[string]bool) *auth.Auth {
 	p.mu.Lock()

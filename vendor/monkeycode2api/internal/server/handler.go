@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -154,12 +155,30 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	tried := map[string]bool{}
 	var lastErr error
+	var heldUID string
+	defer func() {
+		if heldUID != "" {
+			h.cfg.Pool.Release(heldUID)
+		}
+	}()
+	limit, _ := strconv.Atoi(r.URL.Query().Get("_unified_account_limit"))
 	for i := 0; i < 3; i++ {
 		acct := h.cfg.Pool.PickExcluding(tried)
+		if limit > 0 && limit <= 1000 {
+			if heldUID != "" {
+				h.cfg.Pool.Release(heldUID)
+				heldUID = ""
+			}
+			acct = h.cfg.Pool.PickReserved(tried, limit)
+			if acct != nil {
+				heldUID = acct.UID
+			}
+		}
 		if acct == nil {
 			break
 		}
 		tried[acct.UID] = true
+		w.Header().Set("X-Unified-Account", acct.UID)
 		if h.cfg.Models != nil && h.cfg.Models.HasAccount(acct.UID) {
 			if _, ok := h.cfg.Models.ResolveForAccount(acct.UID, req.Model); !ok {
 				lastErr = &upstream.ChatError{Kind: upstream.ErrNotFound, Msg: "model is not available for the enabled MonkeyCode accounts: " + req.Model}

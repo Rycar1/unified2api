@@ -168,7 +168,7 @@ class Connections:
     async def relay_row(self, row, path, body, scope, receive, send):
         if not row["enabled"]:
             raise HTTPException(503, "自定义服务已暂停")
-        if path not in {"/v1/chat/completions", "/v1/responses"}:
+        if path not in {"/v1/chat/completions", "/v1/responses", "/v1/responses/compact"}:
             raise HTTPException(400, "自定义服务支持 Chat Completions / Responses，具体以该服务能力为准")
         if row.get("kind") == "workbuddy_intl" and row.get("adapter") != "hub" and path != "/v1/chat/completions":
             raise HTTPException(400, "WorkBuddy AI 中转仅支持 Chat Completions")
@@ -177,13 +177,24 @@ class Connections:
             async with self.client(row.get("kind", "openai")) as client:
                 async with client.stream("POST", row["base_url"] + path.removeprefix("/v1"), content=body,
                         headers={"Authorization": "Bearer " + row["key"], "Content-Type": "application/json",
+                                 **({"X-Unified-Account-Uid":row["account_uid"]} if row.get("adapter")=="hub" and row.get("account_uid") else {}),
                                  **({"X-Realm": "intl"} if row.get("adapter") == "hub" else
                                     {"x-wb-site": "intl"} if row.get("kind") == "workbuddy_intl" else {})}) as response:
                     if response.status_code >= 300:
                         detail = await _bounded_body(response)
+                        from .diagnostics import CURRENT_TRACE
+                        trace = CURRENT_TRACE.get()
+                        if trace and trace.current_response:
+                            try:
+                                trace.current_response.value(json.loads(detail))
+                            except (ValueError,TypeError):
+                                pass
                         raise HTTPException(response.status_code if response.status_code >= 400 else 502,
                                             safe_error_message(detail, response.status_code, (row["key"],)))
                     content_type = response.headers.get("content-type", "application/json")
+                    if row.get("adapter")=="hub" and response.headers.get("X-Unified-Account"):
+                        from .diagnostics import note_account
+                        note_account("workbuddy",response.headers["X-Unified-Account"])
                     async def chunks():
                         if "text/event-stream" in content_type and path == "/v1/chat/completions":
                             # Empty tool arrays must not split reasoning blocks in AI SDK clients.

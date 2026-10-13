@@ -302,7 +302,7 @@ class RequestLogMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") not in {
-            "/v1/chat/completions", "/v1/responses", "/v1/messages"
+            "/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/messages"
         }:
             return await self.app(scope, receive, send)
         parts, size = [], 0

@@ -14,6 +14,7 @@ from .qoder_hub import QoderHubTransport, error_for, realm
 from .qoder import number, expiry, quota_balance
 from .qoder_relay import QoderRelay
 from .errors import safe_error_message
+from .diagnostics import CURRENT_TRACE, note_account
 
 
 def model_aliases(rows):
@@ -35,6 +36,7 @@ class QoderAccounts(QoderRelay):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.pool = self.transport.accounts.AccountPool(str(self.root / "hub-accounts"))
         self.pool.load()
+        self.active = {}
         machine_path = self.root / "hub-machine.json"
         machines = json.loads(machine_path.read_text("utf-8")) if machine_path.exists() else {
             "cn": secrets.token_hex(16), "intl": secrets.token_hex(16)}
@@ -92,6 +94,7 @@ class QoderAccounts(QoderRelay):
             "provider": "qoder", "region": "cn" if account.realm == "cn" else "global",
             "enabled": bool(account.enabled), "expires_at": account.expires_at * 1000,
             "remaining": number(credits.get("remain")), "status": status,
+            "inflight": self.active.get(self.account_id(account),0),
             "last_error": str(error_for(account.last_error, account=account).detail) if account.last_error else ""}
 
     async def accounts(self):
@@ -209,7 +212,7 @@ class QoderAccounts(QoderRelay):
                 mid = prefix + aliases[key]
                 result[mid] = {"id": mid, "object": "model",
                     "owned_by": "qoder_cn" if account.realm == "cn" else "qoder", "region": account.realm,
-                    "vision": bool(row.get("is_vl")), "reasoning": bool(row.get("is_reasoning")),
+                    "vision": row.get("is_vl") if type(row.get("is_vl")) is bool else None, "reasoning": bool(row.get("is_reasoning")),
                     "catalog_source": "live" if cached else "snapshot"}
         return list(result.values())
 
@@ -285,8 +288,21 @@ class QoderAccounts(QoderRelay):
         start = self.pool._cursor % len(candidates)
         self.pool._cursor += 1
         candidates = candidates[start:] + candidates[:start]
+        trace = CURRENT_TRACE.get()
+        if trace and trace.smart:
+            candidates = [(account,key,metadata) for account,key,metadata in candidates
+                          if self.active.get(self.account_id(account),0)<trace.max_account_concurrency
+                          and (account.credits or {}).get("remain")!=0]
+            candidates.sort(key=lambda item:(self.active.get(self.account_id(item[0]),0),-((item[0].credits or {}).get("remain") or 0)))
+            if not candidates:
+                raise HTTPException(503,"Qoder 当前站点的额度或并发已达上限")
         for index, (account, key, metadata) in enumerate(candidates):
             emitted = False
+            aid = self.account_id(account)
+            if trace and trace.smart and self.active.get(aid,0)>=trace.max_account_concurrency:
+                continue
+            self.active[aid] = self.active.get(aid,0)+1
+            note_account("qoder-cn" if account.realm=="cn" else "qoder",aid,account.nickname)
             try:
                 async with self.locks.setdefault(self.account_id(account), asyncio.Lock()):
                     if await self.transport.refresh(account):
@@ -300,6 +316,9 @@ class QoderAccounts(QoderRelay):
                 account.note_error(str(exc.detail), cooldown=60, model=key)
                 if emitted or index == len(candidates) - 1 or exc.status_code in (400, 422):
                     raise error_for(exc.detail, exc.status_code, account) from None
+            finally:
+                self.active[aid] = max(0,self.active.get(aid,0)-1)
+        raise HTTPException(503,"Qoder 账号池繁忙，请稍后重试")
 
     def owner_flow(self, fid, req):
         flow = self.flows.get(fid)

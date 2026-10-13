@@ -1,0 +1,125 @@
+"""Model capabilities with explicit provenance, overrides and synthetic probes."""
+import asyncio
+import json
+import secrets
+import time
+from fastapi import HTTPException
+
+PROTOCOL_VALUES = {'native','converted','supported','unsupported','unknown'}
+FIELDS = {'vision','tools','compact','context_window','protocols'}
+
+
+class ModelCapabilities:
+    def __init__(self,config):
+        self.config = config
+        self.lock = asyncio.Lock()
+
+    def describe(self,row):
+        prefix = row['id'].partition('/')[0]
+        converted = prefix in {'codebuddy','workbuddy','qoder','qoder-cn'}
+        chat_only = prefix in {'trae','monkeycode'}
+        protocols = {'chat':'supported' if converted or chat_only else 'unknown',
+                     'responses':'converted' if converted else 'unsupported' if chat_only else 'unknown',
+                     'messages':'converted' if converted and prefix!='workbuddy' else 'unsupported'}
+        result = {'vision':None,'tools':None,'context_window':None,'compact':False if converted or chat_only else None,
+                  'protocols':protocols,'sources':{'protocols':'gateway','compact':'gateway' if converted or chat_only else 'unknown'}}
+        for field in ('vision','tools'):
+            if type(row.get(field)) is bool:
+                result[field] = row[field]
+                result['sources'][field] = row.get('catalog_source','catalog')
+        if type(row.get('context_window')) is int and row['context_window']>0:
+            result['context_window'] = row['context_window']
+            result['sources']['context_window'] = row.get('catalog_source','catalog')
+        for name,source in [('detected_capabilities','probe'),('model_capabilities','manual')]:
+            saved = self.config.get(name,{}).get(row['id'],{})
+            for field in FIELDS:
+                if field in saved:
+                    result[field] = {**result[field],**saved[field]} if field=='protocols' else saved[field]
+                    result['sources'][field] = source
+            if saved.get('checked_at'):
+                result['checked_at'] = saved['checked_at']
+        return result
+
+    def save(self,model,body):
+        if not isinstance(body,dict) or set(body)-FIELDS:
+            raise HTTPException(400,'模型能力包含不支持的字段')
+        for field in ('vision','tools','compact'):
+            if field in body and body[field] is not None and type(body[field]) is not bool:
+                raise HTTPException(400,'能力状态应为支持、不支持或未知')
+        value = body.get('context_window')
+        if value is not None and (type(value) is not int or not 1<=value<=10**8):
+            raise HTTPException(400,'上下文长度必须是正整数或未知')
+        protocols = body.get('protocols',{})
+        if model.startswith('route/'):
+            raise HTTPException(400,'路由能力由目标决定，请修改目标模型的能力标记')
+        if not isinstance(protocols,dict) or set(protocols)-{'chat','responses','messages'} or any(value not in PROTOCOL_VALUES for value in protocols.values()):
+            raise HTTPException(400,'协议能力格式不正确')
+        if protocols.get('messages','unsupported')!='unsupported':
+            raise HTTPException(400,'此接口不支持手动开启原生 Messages')
+        if model.partition('/')[0] in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn'}:
+            expected = self.describe({'id':model})['protocols']
+            if any(protocols.get(key,expected[key])!=expected[key] for key in protocols) or body.get('compact') is True:
+                raise HTTPException(400,'内置平台的协议由适配器决定，不能用标签开启未实现的原生协议或压缩')
+        with self.config.store.lock:
+            entries = self.config.get('model_capabilities',{})
+            entries[model] = {**entries.get(model,{}),**body}
+            self.config.set('model_capabilities',entries)
+        return self.describe({'id':model})
+
+    def route(self,row,targets,catalog):
+        result = self.describe(row)
+        children = [catalog.get(target) or self.describe({'id':target}) for target in targets]
+        for protocol in ('chat','responses','messages'):
+            values = [child['protocols'].get(protocol,'unknown') for child in children]
+            usable = [value for value in values if value!='unsupported']
+            value = 'unsupported' if not usable else 'unknown' if 'unknown' in usable else 'native' if all(value=='native' for value in usable) else 'converted' if 'converted' in usable else 'supported'
+            result['protocols'][protocol] = value
+        result['compact'] = any(child.get('compact') is True for child in children) if children else False
+        for field in ('vision','tools'):
+            values = [child.get(field) for child in children]
+            result[field] = True if values and all(value is True for value in values) else False if False in values else None
+        windows = [child.get('context_window') for child in children]
+        result['context_window'] = min(windows) if windows and all(windows) else None
+        result['sources'] = {field:'route targets' for field in FIELDS}
+        return result
+
+    async def probe(self,row,runner):
+        if self.lock.locked():
+            raise HTTPException(409,'正在检测模型能力，请稍后重试')
+        async with self.lock:
+            marker = 'unified-probe-'+secrets.token_hex(6)
+            body = {'model':row['id'],'stream':False,'max_tokens':64,
+                    'messages':[{'role':'user','content':marker}],
+                    'tools':[{'type':'function','function':{'name':'unified_probe','description':'Return the exact supplied value.',
+                              'parameters':{'type':'object','properties':{'value':{'type':'string'}},'required':['value']}}}],
+                    'tool_choice':{'type':'function','function':{'name':'unified_probe'}}}
+            detected = {'checked_at':int(time.time()),'tools':None}
+            status,value = await runner('/v1/chat/completions',body)
+            if status==200 and isinstance(value,dict):
+                choices = value.get('choices') or []
+                for choice in choices if isinstance(choices,list) else []:
+                    for call in (choice.get('message') or {}).get('tool_calls') or []:
+                        fn = call.get('function') or {}
+                        try:
+                            valid = fn.get('name')=='unified_probe' and json.loads(fn.get('arguments',''))=={'value':marker}
+                        except (ValueError,TypeError):
+                            valid = False
+                        if valid:
+                            detected['tools'] = True
+            # Conversion is known from the installed adapter. A 200 is insufficient
+            # to claim native Responses or real compaction.
+            if row['id'].partition('/')[0] not in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn','route'}:
+                status,value = await runner('/v1/responses',{'model':row['id'],'input':marker,'stream':False,'max_output_tokens':16})
+                native = status==200 and isinstance(value,dict) and value.get('object')=='response' and value.get('status')=='completed' and isinstance(value.get('output'),list)
+                if native:
+                    detected['protocols'] = {'responses':'native'}
+                    status,value = await runner('/v1/responses/compact',{'model':row['id'],'input':[{'role':'user','content':marker}]})
+                    output = value.get('output',[]) if isinstance(value,dict) else []
+                    detected['compact'] = status==200 and isinstance(output,list) and len(output)==1 and isinstance(output[0],dict) and output[0].get('type')=='compaction' and isinstance(output[0].get('encrypted_content'),str) and bool(output[0]['encrypted_content'])
+                elif status in {404,405}:
+                    detected['protocols'] = {'responses':'unsupported'}
+            with self.config.store.lock:
+                entries = self.config.get('detected_capabilities',{})
+                entries[row['id']] = detected
+                self.config.set('detected_capabilities',entries)
+            return self.describe(row)

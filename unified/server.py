@@ -22,11 +22,18 @@ from .workbuddy_login import WorkBuddyLogin
 from .qoder_accounts_hub import QoderAccounts
 from .workbuddy_runtime import EmbeddedWorkBuddy
 from .errors import safe_error_message
+from .adaptive import AdaptiveRoutes
+from .diagnostics import DiagnosticLog, TrafficMiddleware, note_account
+from .key_controls import KeyControls
+from .capabilities import ModelCapabilities
+from .routing import route_dispatch, dispatch
+from .admin_controls import register_controls
+from .releases import ReleaseManager
 from .features import (AutomationManager, BackupManager, RequestLog,
                        RequestLogMiddleware, RouteManager, UnifiedConfig)
 
 STATIC = Path(__file__).parent / "static"
-PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/messages"}
+PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/messages"}
 
 
 def response_failed(body):
@@ -61,12 +68,13 @@ async def body_json(req):
 
 
 class API:
-    def __init__(self, app, buddy, native, connections=None, routes=None, workbuddy=None, qoder=None):
+    def __init__(self, app, buddy, native, connections=None, routes=None, workbuddy=None, qoder=None, controls=None, capabilities=None):
         self.app, self.buddy, self.native = app, buddy, native
         self.connections = connections
         self.routes = routes
         self.workbuddy = workbuddy
         self.qoder = qoder
+        self.controls, self.capabilities = controls, capabilities
 
     async def models(self):
         code, result = await self.native.request("GET", "/v1/models")
@@ -92,105 +100,37 @@ class API:
                 unavailable.append("workbuddy")
         if self.routes:
             models += self.routes.public_models()
+        if self.capabilities:
+            models = [{**model,"capabilities":self.capabilities.describe(model)} for model in models]
+            catalog = {model['id']:model['capabilities'] for model in models}
+            for model in models:
+                if model['id'].startswith('route/'):
+                    targets = self.routes.get(model['id'].partition('/')[2])['targets']
+                    model['capabilities'] = self.capabilities.route(model,targets,catalog)
         return {"object": "list", "data": models, "unavailable_providers": unavailable}
 
     async def route_request(self, rid, scope, receive, send, data):
-        route, targets = self.routes.candidates(rid)
-        if not targets:
-            raise HTTPException(503, "路由没有可用目标")
-        for index, target in enumerate(targets):
-            routed = dict(data)
-            routed["model"] = target
-            body = json.dumps(routed, ensure_ascii=False, allow_nan=False).encode()
-            sent = False
-
-            async def replay():
-                nonlocal sent
-                if not sent:
-                    sent = True
-                    return {"type": "http.request", "body": body, "more_body": False}
-                return await receive()
-
-            child_scope = dict(scope)
-            child_scope["headers"] = [(k, v) for k, v in scope["headers"] if k.lower() != b"content-length"]
-            child_scope["headers"].append((b"content-length", str(len(body)).encode()))
-            child_scope["state"] = scope.setdefault("state", {})
-            started = time.monotonic()
-            if data.get("stream"):
-                queue = asyncio.Queue(maxsize=16)
-
-                async def capture(message):
-                    await queue.put(message)
-
-                async def run():
-                    try:
-                        await self.__call__(child_scope, replay, capture)
-                    finally:
-                        await queue.put(None)
-
-                task = asyncio.create_task(run())
-                pending = []
-                status = 502
-                failed_payload = False
-                while True:
-                    event = await queue.get()
-                    if event is None:
-                        break
-                    pending.append(event)
-                    if event["type"] == "http.response.start":
-                        status = event["status"]
-                        if not 200 <= status < 300:
-                            break
-                    elif event["type"] == "http.response.body" and event.get("body"):
-                        first = event["body"][:65536]
-                        failed_payload = response_failed(first)
-                        break
-                ok = 200 <= status < 300 and not failed_payload
-                if ok or index == len(targets) - 1:
-                    scope.setdefault("state", {})["resolved_model"] = target
-                    try:
-                        for event in pending:
-                            await send(event)
-                        while True:
-                            event = await queue.get()
-                            if event is None:
-                                break
-                            await send(event)
-                        await task
-                    finally:
-                        self.routes.record(target, ok, status, (time.monotonic() - started) * 1000, route["cooldown_seconds"])
-                    return
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                self.routes.record(target, False, status, (time.monotonic() - started) * 1000, route["cooldown_seconds"])
-            else:
-                events = []
-
-                async def capture(message):
-                    events.append(message)
-
-                await self.__call__(child_scope, replay, capture)
-                status = next((event["status"] for event in events if event["type"] == "http.response.start"), 502)
-                response_body = b"".join(event.get("body", b"") for event in events if event["type"] == "http.response.body")
-                failed_payload = response_failed(response_body[:65536])
-                ok = 200 <= status < 300 and not failed_payload
-                self.routes.record(target, ok, status, (time.monotonic() - started) * 1000, route["cooldown_seconds"])
-                if ok or index == len(targets) - 1:
-                    scope.setdefault("state", {})["resolved_model"] = target
-                    for event in events:
-                        await send(event)
-                    return
-        raise HTTPException(503, "所有路由目标均不可用")
+        return await route_dispatch(self,rid,scope,receive,send,data)
 
     async def stream_native(self, scope, receive, send, body):
         started = False
+        from urllib.parse import parse_qsl, urlencode
+        from .diagnostics import CURRENT_TRACE
+        parameters = [(key,value) for key,value in parse_qsl(scope.get("query_string",b"").decode())
+                      if key!="_unified_account_limit"]
+        trace = CURRENT_TRACE.get()
+        if trace and trace.smart:
+            parameters.append(("_unified_account_limit",str(trace.max_account_concurrency)))
+        query = urlencode(parameters)
         async def produce():
             nonlocal started
-            async for item in self.native.events(scope["method"], scope["path"] +
-                    ("?" + scope["query_string"].decode() if scope.get("query_string") else ""), body):
+            async for item in self.native.events(scope["method"], scope["path"] + ("?" + query if query else ""), body):
                 if "status" in item:
+                    for key,values in item.get("headers",{}).items():
+                        if key.lower()=="x-unified-account" and values:
+                            note_account("monkeycode" if scope["path"].startswith("/monkey") else "trae",values[0])
                     headers = [(k.lower().encode(), v.encode()) for k, vs in item.get("headers", {}).items()
-                               for v in vs if k.lower() not in {"connection", "transfer-encoding"}]
+                               for v in vs if k.lower() not in {"connection", "transfer-encoding", "x-unified-account"}]
                     await send({"type": "http.response.start", "status": item["status"], "headers": headers})
                     started = True
                 elif item.get("data"):
@@ -224,7 +164,16 @@ class API:
         try:
             self.buddy.state.store.check_api(req.headers.get("authorization"), req.headers.get("x-api-key"))
             if path == "/v1/models" and req.method == "GET":
-                return await JSONResponse(await self.models())(scope, receive, send)
+                catalog = await self.models()
+                if self.controls:
+                    authorization = req.headers.get("authorization","")
+                    token = authorization[7:].strip() if authorization.startswith("Bearer ") else req.headers.get("x-api-key","")
+                    with self.buddy.state.store.lock:
+                        kid = next((kid for kid,row in self.buddy.state.store.data["keys"].items() if row["hash"]==digest(token)),None)
+                    if kid and not self.controls.policy(kid)["enabled"]:
+                        raise HTTPException(403,"该密钥已暂停")
+                    catalog["data"] = [row for row in catalog["data"] if self.controls.allowed(kid,row["id"])]
+                return await JSONResponse(catalog)(scope, receive, send)
             if path not in PATHS or req.method != "POST":
                 raise HTTPException(404, "接口不存在")
             chunks, size = [], 0
@@ -252,6 +201,8 @@ class API:
                 return await self.route_request(model, scope, receive, send, data)
             if provider in {"trae", "monkeycode"} and path != "/v1/chat/completions":
                 raise HTTPException(400, "此平台当前仅支持 Chat Completions")
+            if path=="/v1/responses/compact" and provider not in custom_ids:
+                raise HTTPException(400,"此平台没有原生压缩接口；请使用支持原生 Responses 压缩的自定义服务")
             data["model"] = model
             if provider in {"qoder", "qoder-cn"}:
                 data["qoder_region"] = "cn" if provider == "qoder-cn" else "global"
@@ -259,27 +210,7 @@ class API:
                 body = json.dumps(data, ensure_ascii=False, allow_nan=False).encode()
             except (ValueError, RecursionError):
                 raise HTTPException(400, "请求包含无效数字或嵌套过深")
-            if provider == "trae":
-                return await self.stream_native(scope, receive, send, body)
-            if provider == "monkeycode":
-                return await self.stream_native({**scope, "path": "/monkey" + path}, receive, send, body)
-            if provider in {"qoder", "qoder-cn"}:
-                return await self.qoder.relay(path, body, scope, receive, send)
-            if provider == "workbuddy":
-                return await self.workbuddy.relay(path, body, scope, receive, send)
-            if provider in custom_ids:
-                return await self.connections.relay(provider, path, body, scope, receive, send)
-            sent = False
-            async def replay():
-                nonlocal sent
-                if not sent:
-                    sent = True
-                    return {"type": "http.request", "body": body, "more_body": False}
-                return await receive()
-            new_scope = dict(scope)
-            new_scope["headers"] = [(k, v) for k, v in scope["headers"] if k.lower() not in (b"content-length", b"cookie")]
-            new_scope["headers"].append((b"content-length", str(len(body)).encode()))
-            return await self.buddy(new_scope, replay, send)
+            return await dispatch(self,provider,scope,receive,send,body)
         except HTTPException as exc:
             return await JSONResponse({"error": {"message": exc.detail, "type": "invalid_request_error"}}, exc.status_code)(scope, receive, send)
 
@@ -301,9 +232,9 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     metrics = RequestMetrics()
     login_owners = {}
     unified_config = UnifiedConfig(store)
-    routes = RouteManager(unified_config)
+    routes = AdaptiveRoutes(unified_config)
     saved_console_settings = unified_config.get("console_settings", {})
-    request_log = RequestLog(store.root / "request_logs.sqlite", saved_console_settings.get("retention_days", 365))
+    request_log = DiagnosticLog(store.root / "request_logs.sqlite", saved_console_settings.get("retention_days", 365))
     request_log.set_retention_days(saved_console_settings.get("retention_days", 365))
     backup = BackupManager({
         "management": store.root,
@@ -333,7 +264,12 @@ def create_app(native=None, buddy=None, qoder_transport=None):
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(AdminMiddleware)
-    api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts)
+    controls = KeyControls(unified_config,request_log.path)
+    capabilities = ModelCapabilities(unified_config)
+    releases = ReleaseManager(store.root / "releases")
+    api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts,controls,capabilities)
+    register_controls(app,body_json,store,api,request_log,controls,capabilities,releases)
+
 
     async def trae(method, path, obj=None):
         code, data = await native.request(method, path, json.dumps(obj).encode() if obj is not None else b"")
@@ -385,6 +321,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
             rows += await asyncio.wait_for(workbuddy_login.public_accounts(), 8)
         except (HTTPException, asyncio.TimeoutError):
             pass
+        keys = [{**key,"policy":controls.policy(key["id"]),"usage":controls.usage(key["id"])} for key in keys]
         return {"accounts": rows, "connections": connections.rows(), "keys": keys, "pool": settings, "metrics": metrics.snapshot(),
                 "models": (await api.models())["data"], "routes": routes.rows(), "automation": automation.settings(),
                 "automation_history": unified_config.get("automation_history", [])[:10],
@@ -761,13 +698,15 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         return FileResponse(archive, filename="monkey-login-helper.zip", media_type="application/zip")
 
     app.mount("/", buddy)
-    result = RequestLogMiddleware(MetricsMiddleware(api, metrics=metrics), request_log)
+    result = TrafficMiddleware(RequestLogMiddleware(MetricsMiddleware(api, metrics=metrics), request_log),store,controls,request_log)
     result.state = app.state
     result.state.buddy, result.state.native = buddy, native
     result.state.connections = connections
     result.state.monkey_login = monkey_login
     result.state.workbuddy_login = workbuddy_login
     result.state.qoder_accounts = qoder_accounts
+    result.state.controls, result.state.capabilities, result.state.releases = controls, capabilities, releases
+    result.state.api = api
     return result
 
 

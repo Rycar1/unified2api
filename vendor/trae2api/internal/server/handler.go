@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -443,13 +444,31 @@ func (h *Handler) executeWorkRequest(w http.ResponseWriter, r *http.Request, bod
 
 	tried := map[string]bool{}
 	var lastErr error
+	var workHeldUID string
+	defer func() {
+		if workHeldUID != "" {
+			h.cfg.Pool.Release(workHeldUID)
+		}
+	}()
 
 	for i := 0; i < h.cfg.MaxRotate; i++ {
 		acct := h.cfg.Pool.PickWorkAffinity(sessionKey, tried)
+		limit, _ := strconv.Atoi(r.URL.Query().Get("_unified_account_limit"))
+		if limit > 0 && limit <= 1000 {
+			if workHeldUID != "" {
+				h.cfg.Pool.Release(workHeldUID)
+				workHeldUID = ""
+			}
+			acct = h.cfg.Pool.PickReserved(tried, limit, true)
+			if acct != nil {
+				workHeldUID = acct.UID
+			}
+		}
 		if acct == nil {
 			break
 		}
 		tried[acct.UID] = true
+		w.Header().Set("X-Unified-Account", acct.UID)
 
 		refreshed, err := h.cfg.Upstream.RefreshTokenIfNeeded(acct, h.cfg.RefreshSkew)
 		if err != nil {
@@ -602,12 +621,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	tried := map[string]bool{}
 	var lastErr error
 	for i := 0; i < h.cfg.MaxRotate; i++ {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("_unified_account_limit"))
 		acct := h.cfg.Pool.PickAffinity(sessionKey, tried)
+		if limit > 0 && limit <= 1000 {
+			if heldUID != "" {
+				h.cfg.Pool.Release(heldUID)
+				heldUID = ""
+			}
+			acct = h.cfg.Pool.PickReserved(tried, limit, false)
+		}
 		if acct == nil {
 			break
 		}
 		tried[acct.UID] = true
-		acquireAcct(acct.UID)
+		w.Header().Set("X-Unified-Account", acct.UID)
+		if limit > 0 && limit <= 1000 {
+			heldUID = acct.UID
+		} else {
+			acquireAcct(acct.UID)
+		}
 		st.uid = acct.UID
 
 		// token 临近过期 → 先 refresh（持锁重查，避免并发重复轮换；失败冷却换号）
@@ -642,6 +674,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			case upstream.ErrPlanLimit:
 				h.cfg.Pool.Cooldown(acct.UID, pool.CoolPlan, h.cfg.PlanCooldown, "plan 权益不足")
 				lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
+				h.cfg.Pool.Release(heldUID)
+				heldUID = ""
 				if handled, _ := h.executeWorkRequest(w, r, body, configName, peek.Stream, sessionKey); handled {
 					st.status = http.StatusOK
 					return
@@ -710,6 +744,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 所有账号耗尽/冷却，尝试 Work 通道兜底消费 work_credits
+	h.cfg.Pool.Release(heldUID)
+	heldUID = ""
 	if handled, _ := h.executeWorkRequest(w, r, body, configName, peek.Stream, sessionKey); handled {
 		st.status = http.StatusOK
 		return

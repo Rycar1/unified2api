@@ -88,6 +88,7 @@ class WorkBuddyLogin:
                          "name": account.get("nickname") or account["uid"], "enabled": account.get("enabled", False),
                          "status": "paused" if not account.get("enabled") else "cooling" if account.get("inCooldown") else "ready",
                          "remaining": remaining if isinstance(remaining, (int, float)) else None,
+                         "inflight": getattr(self,"active",{}).get(account["uid"],0),
                          "expires_at": expiry * 1000 if isinstance(expiry, (int, float)) and expiry < 100000000000 else expiry or 0,
                          "last_error": account.get("lastError") or ""})
         return rows
@@ -104,10 +105,36 @@ class WorkBuddyLogin:
                 for item in items if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
 
     async def relay(self, path, body, scope, receive, send):
-        if not any(a.get("enabled") for a in await self.accounts()):
+        accounts = await self.accounts()
+        if not any(a.get("enabled") for a in accounts):
             raise HTTPException(503, "WorkBuddy 国际站没有已启用账号")
         row = {"id": "workbuddy", "kind": "workbuddy_intl", "adapter": "hub",
                "base_url": self.hub_url + "/v1", "key": self.api_key, "enabled": True}
+        from .diagnostics import CURRENT_TRACE, note_account
+        trace = CURRENT_TRACE.get()
+        if trace and trace.smart:
+            if not hasattr(self,"active"):
+                self.active = {}
+            ready = [account for account in accounts if account.get("enabled") and not account.get("inCooldown")
+                     and (account.get("credits") or {}).get("remain")!=0
+                     and self.active.get(account["uid"],0)<trace.max_account_concurrency]
+            ready.sort(key=lambda account:(self.active.get(account["uid"],0),-((account.get("credits") or {}).get("remain") or 0)))
+            if not ready:
+                raise HTTPException(503,"WorkBuddy 当前账号的额度或并发已达上限")
+            for index,account in enumerate(ready):
+                aid = account["uid"]
+                if self.active.get(aid,0)>=trace.max_account_concurrency:
+                    continue
+                self.active[aid] = self.active.get(aid,0)+1
+                note_account("workbuddy",aid,account.get("nickname",aid))
+                try:
+                    return await self.connections.relay_row({**row,"account_uid":aid},path,body,scope,receive,send)
+                except HTTPException as exc:
+                    if index==len(ready)-1 or exc.status_code in (400,422):
+                        raise
+                finally:
+                    self.active[aid] = max(0,self.active.get(aid,0)-1)
+            raise HTTPException(503,"WorkBuddy 账号池繁忙，请稍后重试")
         return await self.connections.relay_row(row, path, body, scope, receive, send)
 
     async def account(self, aid):

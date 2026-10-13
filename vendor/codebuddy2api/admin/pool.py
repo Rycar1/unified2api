@@ -56,6 +56,7 @@ class AccountPool:
         self.client_factory = client_factory or (lambda: httpx.Client(timeout=20, follow_redirects=False))
         self.locks = {}
         self.cursor = 0
+        self.active = {}
         self.jobs = asyncio.Lock()
         self.last_sync = 0
         with store.lock:
@@ -101,19 +102,36 @@ class AccountPool:
                         "today_checked_in": status.get("checkin_date") == today, "cooldown_until": status.get("cooldown_until", 0),
                         "last_error": status.get("last_error"), "token_refreshed": status.get("token_refreshed"),
                         "request_count": status.get("request_count", 0)})
+            row["inflight"] = self.active.get(row["id"],0)
         return rows
 
-    def select(self):
+    def select(self, smart=False, max_concurrency=2):
         with self.store.lock:
             candidates = [row for row in self.store.account_rows() if self.state(row) == "available"]
             if self.store.data["pool"]["routing"] == "manual":
                 candidates = [row for row in candidates if row["id"] == self.store.data["active"]]
+            if smart:
+                candidates = [row for row in candidates if self.active.get(row["id"],0)<max_concurrency]
             if not candidates:
                 raise HTTPException(503, "暂无可用账号：请检查暂停、积分、冷却或登录状态")
-            aid = candidates[self.cursor % len(candidates)]["id"]
+            if smart:
+                candidates = candidates[self.cursor % len(candidates):]+candidates[:self.cursor % len(candidates)]
+                def score(row):
+                    status = self.store.data["account_status"].get(row["id"],{})
+                    balance = status.get("remaining") if status.get("credits_updated",0)>self.clock()-600 else None
+                    return self.active.get(row["id"],0),-(balance if isinstance(balance,(int,float)) else 0)
+                candidates.sort(key=score)
+                aid = candidates[0]["id"]
+            else:
+                aid = candidates[self.cursor % len(candidates)]["id"]
             self.cursor += 1
+            self.active[aid] = self.active.get(aid,0)+1
             item = self.store.data["accounts"][aid]
             return aid, self.store.manager_for(aid, item)
+
+    def release(self, aid):
+        with self.store.lock:
+            self.active[aid] = max(0,self.active.get(aid,0)-1)
 
     def record(self, aid, status=200):
         with self.store.lock:
@@ -272,22 +290,41 @@ class PoolMiddleware:
         if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] not in {"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/messages/count_tokens"}:
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers", []))
+        leased_aid = None
         try:
             self.pool.store.check_api(headers.get(b"authorization", b"").decode(), headers.get(b"x-api-key", b"").decode())
-            aid, manager = self.pool.select()
+            aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2))
+            leased_aid = aid
             # Refresh before entering a stream; retry another eligible account only
             # if credential preparation fails, never replay a partially emitted response.
             try:
                 await asyncio.to_thread(manager.get_headers)
             except Exception:
                 self.pool.update(aid, cooldown_until=self.pool.clock()+300, last_error="凭据暂不可用，已冷却 5 分钟")
-                aid, manager = self.pool.select()
-                await asyncio.to_thread(manager.get_headers)
+                self.pool.release(aid)
+                leased_aid = None
+                aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2))
+                leased_aid = aid
+                try:
+                    await asyncio.to_thread(manager.get_headers)
+                except Exception:
+                    self.pool.release(aid)
+                    leased_aid = None
+                    raise
+        except asyncio.CancelledError:
+            if leased_aid is not None:
+                self.pool.release(leased_aid)
+            raise
         except HTTPException as e:
+            if leased_aid is not None:
+                self.pool.release(leased_aid)
             return await JSONResponse({"detail": e.detail}, e.status_code)(scope, receive, send)
         except Exception:
+            if leased_aid is not None:
+                self.pool.release(leased_aid)
             return await JSONResponse({"detail": "账号凭据暂不可用，请刷新凭据或重新授权"}, 503)(scope, receive, send)
         token = REQUEST_CREDENTIAL.set(manager)
+        scope.setdefault("state",{})["selected_account"] = {"id":aid,"name":self.pool.store.data["accounts"].get(aid,{}).get("name","")}
         status = 200
         buffer = b""
         async def observe(message):
@@ -314,4 +351,5 @@ class PoolMiddleware:
             await self.app(scope, receive, observe)
         finally:
             REQUEST_CREDENTIAL.reset(token)
+            self.pool.release(aid)
             self.pool.record(aid, status)
