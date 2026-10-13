@@ -13,4 +13,4 @@
 - [x] ARTEX/blog React redesign, graceful filter/layout/dialog motion
 - [x] Backend, UI and isolated Docker verification
 
-Verified: 146 backend tests in a fresh single-container image; 18 desktop/mobile/dark/reduced-motion browser checks; Windows standalone apply and byte-exact restore in an isolated profile. Real account reward claims and real provider generations were not executed.
+Verified: 153 backend tests in a fresh single-container image; all MonkeyCode Go packages; 18 desktop/mobile/dark/reduced-motion browser checks; Windows standalone apply and byte-exact restore in an isolated profile. Independent review found no remaining Critical/Required issues after import identity and restore rollback fixes. Real account reward claims and real provider generations were not executed.
