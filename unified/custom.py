@@ -168,7 +168,9 @@ class Connections:
     async def relay_row(self, row, path, body, scope, receive, send):
         if not row["enabled"]:
             raise HTTPException(503, "自定义服务已暂停")
-        if path not in {"/v1/chat/completions", "/v1/responses", "/v1/responses/compact"}:
+        accepted={"/v1/chat/completions", "/v1/responses", "/v1/responses/compact"}
+        if row.get('adapter')=='hub': accepted.add('/v1/messages')
+        if path not in accepted:
             raise HTTPException(400, "自定义服务支持 Chat Completions / Responses，具体以该服务能力为准")
         if row.get("kind") == "workbuddy_intl" and row.get("adapter") != "hub" and path != "/v1/chat/completions":
             raise HTTPException(400, "WorkBuddy AI 中转仅支持 Chat Completions")

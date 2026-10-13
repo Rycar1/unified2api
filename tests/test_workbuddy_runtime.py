@@ -6,6 +6,8 @@ from pathlib import Path
 
 import httpx
 from unified.workbuddy_runtime import EmbeddedWorkBuddy
+from unified.workbuddy_login import WorkBuddyLogin
+from unified.task_center import TaskCenter
 
 
 class EmbeddedRuntime(unittest.IsolatedAsyncioTestCase):
@@ -28,6 +30,15 @@ class EmbeddedRuntime(unittest.IsolatedAsyncioTestCase):
                         'Authorization':'Bearer test-runtime-api-key'})
                     self.assertEqual(result.status_code,200,result.text)
                     self.assertEqual(result.json()['accounts'],[])
+                hub=WorkBuddyLogin(None,None,'test-runtime-api-key','test-runtime-admin-key',
+                    hub_url='http://127.0.0.1:'+str(address[1]))
+                tasks=TaskCenter(None,None,None,None,hub)
+                settings=await tasks.settings({'reserve_credits':7,'daily_token_limit':100,
+                    'daily_credit_limit':2,'model_daily_token_limit':40,'local_web_tools':True,
+                    'pricing_enabled':True,'remaining_priority_enabled':True})
+                self.assertEqual(settings['reserve_credits'],7)
+                self.assertEqual(settings['model_daily_token_limit'],40)
+                self.assertTrue(settings['local_web_tools'])
                 self.assertEqual(sentinel.read_text(encoding='utf-8'),'keep existing volume data')
             self.assertFalse(runtime.thread.is_alive())
             self.assertFalse(runtime.proxy.SCHEDULER._thread.is_alive())

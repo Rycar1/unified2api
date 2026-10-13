@@ -445,6 +445,43 @@ _JSON = r'''
     ]
   },
   {
+    "id": "grok-4.7",
+    "name": "Grok-4.7",
+    "descriptionEn": "SpaceXAI's frontier model built for coding, agentic tasks, and knowledge work.",
+    "descriptionZh": "SpaceXAI 打造的前沿模型，专为编程、智能体任务及知识型工作而设计。",
+    "credits": "x1.90",
+    "maxInputTokens": 500000,
+    "maxOutputTokens": 128000,
+    "maxAllowedSize": 500000,
+    "supportsImages": true,
+    "supportsToolCall": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+      "canDisableThinking": false,
+      "defaultEffort": "high",
+      "supportedEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "relatedModels": {
+      "lite": "grok-4.7",
+      "reasoning": "grok-4.7"
+    },
+    "contextWindow": {
+      "defaultLength": 200000,
+      "supportedLengths": [
+        200000,
+        500000
+      ]
+    },
+    "temperature": 1,
+    "vendor": "f"
+  },
+  {
     "id": "gpt-5.3-codex",
     "name": "GPT-5.3-Codex",
     "descriptionEn": "OpenAI's coding-specialized model, great for complex coding tasks",

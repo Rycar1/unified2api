@@ -33,7 +33,7 @@ from .features import (AutomationManager, BackupManager, RequestLog,
                        RequestLogMiddleware, RouteManager, UnifiedConfig)
 
 STATIC = Path(__file__).parent / "static"
-PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/messages"}
+PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/messages",'/v1/messages/count_tokens'}
 
 
 def response_failed(body):
@@ -114,6 +114,10 @@ class API:
                 for field in ('context_window','max_output_tokens','reasoning','reasoning_efforts'):
                     if capability.get(field) is not None:
                         model[field]=capability[field]
+                    else:
+                        model.pop(field,None)
+                if not model.get('context_window'): model.pop('context_length',None)
+                if not model.get('max_output_tokens'): model.pop('max_completion_tokens',None)
                 if model.get('context_window'):
                     model['context_length']=model['context_window']
                 if model.get('max_output_tokens'):
@@ -210,6 +214,16 @@ class API:
                 providers.add("route")
             if not sep or provider not in providers or not model.strip():
                 raise HTTPException(400, "请选择模型目录中带平台或服务前缀的模型")
+            if path=='/v1/messages/count_tokens':
+                from .token_estimate import input_tokens
+                authorization=req.headers.get('authorization','')
+                token=authorization[7:].strip() if authorization.startswith('Bearer ') else req.headers.get('x-api-key','')
+                with self.buddy.state.store.lock:
+                    kid=next((kid for kid,row in self.buddy.state.store.data['keys'].items() if row['hash']==digest(token)),None)
+                if self.controls and (not self.controls.policy(kid)['enabled'] or not self.controls.allowed(kid,data['model'])):
+                    raise HTTPException(403,'该密钥没有访问此模型的权限')
+                return await JSONResponse({'input_tokens':input_tokens(data),'estimated':True,
+                    'tokenizer':'gateway-estimate'})(scope,receive,send)
             if provider == "route":
                 return await self.route_request(model, scope, receive, send, data)
             if provider in {"trae", "monkeycode"} and path != "/v1/chat/completions":
@@ -245,6 +259,9 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     metrics = RequestMetrics()
     login_owners = {}
     unified_config = UnifiedConfig(store)
+    if embedded_workbuddy:
+        embedded_workbuddy.config=unified_config
+    workbuddy_login.runtime=embedded_workbuddy
     routes = AdaptiveRoutes(unified_config)
     saved_console_settings = unified_config.get("console_settings", {})
     request_log = DiagnosticLog(store.root / "request_logs.sqlite", saved_console_settings.get("retention_days", 365))
@@ -254,6 +271,8 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         "codebuddy-auth": store.auth_dir,
         "trae-auth": Path(os.environ.get("TW2A_AUTH_DIR", "/app/auths")),
         "trae-data": Path(os.environ.get("TW2A_STATE_FILE", "/app/trae-data/state.json")).parent,
+        'workbuddy-accounts':Path(os.environ.get('WORKBUDDY_ACCOUNTS_DIR','/data/workbuddy/accounts')),
+        'workbuddy-usage':Path(os.environ.get('WORKBUDDY_USAGE_DIR','/data/workbuddy/usage')),
     })
     automation = None
 
@@ -282,6 +301,20 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     releases = ReleaseManager(store.root / "releases")
     api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts,controls,capabilities)
     register_controls(app,body_json,store,api,request_log,controls,capabilities,releases)
+    from .task_center import TaskCenter
+    task_center=TaskCenter(unified_config,store,pool,qoder_accounts,workbuddy_login,native)
+    task_center.register(app,body_json)
+    app.state.task_center=task_center
+    from .bulk_import import BulkImport
+    bulk_import=BulkImport(app,store,pool,qoder_accounts,workbuddy_login,api)
+    bulk_import.register(app,body_json)
+    from .client_setup import register_client_setup
+    register_client_setup(app,store,api,body_json)
+    @app.get('/admin/api/unified/performance')
+    async def performance(req:Request,days:int=30):
+        store.require_admin(req)
+        from .performance import performance_summary
+        return performance_summary(request_log,days)
 
 
     async def trae(method, path, obj=None):
@@ -306,7 +339,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
 
     @app.get("/admin/assets/{filename}")
     async def asset(filename: str):
-        if filename not in ("app.js", "style.css"):
+        if filename not in ("app.js", "style.css", "brand.png"):
             raise HTTPException(404)
         return FileResponse(STATIC / filename)
 
@@ -436,6 +469,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         return await trae("GET", "/admin/api/credits")
 
     async def run_maintenance(action):
+        if action=='benefits': return await task_center.run_all_benefits()
         groups = []
         try:
             if action == "checkin":

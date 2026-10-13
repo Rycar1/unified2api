@@ -123,18 +123,37 @@ class QoderAccounts(QoderRelay):
         return value.strip()
 
     async def import_account(self, body):
+        value=body.get('credential')
+        if isinstance(value,str) and value.lstrip().startswith('['):
+            try:
+                value=json.loads(value)
+            except ValueError:
+                raise HTTPException(400,'请输入有效 JSON 凭据') from None
+        if not isinstance(value,list):
+            return await self.import_single(body)
+        if not 1<=len(value)<=100:
+            raise HTTPException(400,'一次可导入 1–100 个账号')
+        results=[]
+        for index,credential in enumerate(value):
+            try:
+                row=await self.import_single({**body,'credential':credential})
+                results.append({'index':index,'ok':True,'id':row['id']})
+            except (HTTPException,ValueError,TypeError):
+                results.append({'index':index,'ok':False,'message':'凭据无效或授权交换失败，请检查这一条账号'})
+        imported=sum(row['ok'] for row in results)
+        return {'ok':bool(imported),'imported':imported,'failed':len(results)-imported,'results':results}
+
+    async def import_single(self, body):
         value, target = body.get("credential"), realm(body.get("region"))
         name = self.name(body.get("name", ""))
         if isinstance(value, str):
             value = value.strip()
             if value.startswith("pt-"):
-                return await self.import_pat(value, target, name)
+                return await self.import_pat(value, target, name,overwrite=body.get('overwrite',True))
             try:
                 value = json.loads(value)
             except ValueError:
                 raise HTTPException(400, "请输入 PAT（pt- 开头）或有效 JSON 凭据") from None
-        if isinstance(value, list) and value:
-            value = value[0]
         if not isinstance(value, dict):
             raise HTTPException(400, "凭据必须是 PAT 或 JSON 对象")
         value = value.get("user", value)
@@ -145,7 +164,7 @@ class QoderAccounts(QoderRelay):
             raise HTTPException(400, "凭据格式无效")
         target = realm(value.get("region") or value.get("realm") or body.get("region"))
         if value.get("personalToken") or value.get("personal_token"):
-            return await self.import_pat(value.get("personalToken") or value["personal_token"], target, name)
+            return await self.import_pat(value.get("personalToken") or value["personal_token"], target, name,overwrite=body.get('overwrite',True))
         uid = value.get("uid") or value.get("userId") or value.get("id")
         token = value.get("accessToken") or value.get("securityOauthToken") or value.get("security_oauth_token") or value.get("token")
         if not isinstance(uid, str) or not uid.strip() or not isinstance(token, str) or not token.strip():
@@ -156,6 +175,9 @@ class QoderAccounts(QoderRelay):
             "realm": target, "userType": value.get("userType", ""),
             "expiresAt": expiry(value.get("expiresAt") or value.get("expireTime")) / 1000,
             "source": "import"})
+        previous=self.pool.get(account.uid,account.realm)
+        if previous and body.get('overwrite') is False:
+            return {**self.public(previous),'skipped':True}
         return self.adopt(account)
 
     def adopt(self, account):
@@ -167,13 +189,16 @@ class QoderAccounts(QoderRelay):
         self.pool.add(account)
         return self.public(account)
 
-    async def import_pat(self, pat, target, name):
+    async def import_pat(self, pat, target, name,overwrite=True):
         if not isinstance(pat, str) or not pat.startswith("pt-"):
             raise HTTPException(400, "PAT 必须以 pt- 开头")
         account = self.transport.accounts.Account({"realm": target, "personalToken": pat, "source": "pat"})
         await self.transport.refresh(account, force=True)
         info = await self.transport.identify(account)
         account.nickname = name or info.get("name") or info.get("email") or account.uid
+        previous=self.pool.get(account.uid,account.realm)
+        if previous and not overwrite:
+            return {**self.public(previous),'skipped':True}
         result = self.adopt(account)
         try:
             await self.operate(result["id"], "refresh")
@@ -225,12 +250,16 @@ class QoderAccounts(QoderRelay):
             await self.transport.refresh(account, force=action == "refresh")
             self.save(account)
             message, ok, earned_credit = "", True, None
-            if action == "checkin":
+            report={}
+            if action in {"checkin","benefits","pro_claim"}:
                 tasks = __import__("qoder_tasks")
-                report = await asyncio.to_thread(tasks.run_checkin, account, only_daily=True)
+                if action=='pro_claim':
+                    report=await asyncio.to_thread(tasks.run_pro_claim,account)
+                else:
+                    report = await asyncio.to_thread(tasks.run_checkin, account, only_daily=action=='checkin')
                 ok = report.get("ok", False)
                 earned_credit = number(report.get("earned_credit"))
-                message = report.get("campaign") or "；".join(report.get("logs", [])[-2:]) or "签到已执行"
+                message = report.get("campaign") or report.get('msg') or "；".join(report.get("logs", [])[-2:]) or "福利领取已执行"
             quota = await self.transport.request(account, "/api/v2/quota/usage")
             remaining = quota_balance(quota)
             account.credits = {"remain": remaining, "exceeded": quota.get("isQuotaExceeded") is True}
@@ -244,7 +273,8 @@ class QoderAccounts(QoderRelay):
                 except HTTPException as exc:
                     message = "凭据和余额已更新；模型目录刷新失败：" + str(exc.detail)
             return {"id": aid, "ok": ok, "remaining": remaining, "status": self.public(account)["status"],
-                **({"earned_credit": earned_credit} if action == "checkin" else {}),
+                **({"earned_credit": earned_credit,'state':report.get('state') or ('completed' if ok else 'failed'),
+                    'already_claimed':bool(report.get('already_claimed'))} if action in {'checkin','benefits','pro_claim'} else {}),
                 "message": safe_error_message(message or ("余额已更新" if remaining is not None else "上游未提供余额"),
                     200, secrets=(account.access_token, account.refresh_token, account.personal_token)).removeprefix("HTTP 200：")}
 
@@ -361,7 +391,7 @@ class QoderAccounts(QoderRelay):
         @app.post("/admin/api/unified/qoder/accounts/{aid}/{action}")
         async def operate(aid: str, action: str, req: Request):
             self.store.require_admin(req)
-            if action not in ("refresh", "checkin"):
+            if action not in ("refresh", "checkin","benefits","pro_claim"):
                 raise HTTPException(404, "操作不存在")
             return await self.operate(aid, action)
 

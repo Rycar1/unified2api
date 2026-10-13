@@ -34,11 +34,13 @@ pnpm-debug.log*
 
 # Local builds and IDE files
 *.exe
+!unified/downloads/client-configure.exe
 *.spec
 build/
 dist/
 .playwright/
 .playwright-cli/
+/output/playwright/
 .idea/
 .vscode/
 .DS_Store

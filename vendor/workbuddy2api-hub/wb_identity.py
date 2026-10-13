@@ -2,26 +2,26 @@
 """wb_identity.py - 出站身分 (WorkBuddy 桌面端 / 官方 VSCode 插件 / 官方 CodeBuddy CLI)
 
 支援三套出站身分:
-  1. WorkBuddy 獨立桌面客戶端 (workbuddy / desktop / wb):
+  1. WorkBuddy 独立桌面客户端 (workbuddy / desktop / wb):
      - X-IDE-Type: WorkBuddy
      - X-IDE-Name: WorkBuddy
      - X-Product: WorkBuddy
-     - 國際版端點: www.workbuddy.ai (UA: WorkBuddy/5.5.2 WorkBuddy AI/5.5.2 CLI/5.5.2)
-     - 國內版端點: copilot.tencent.com (UA: WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1)
+     - 国际版端点: www.workbuddy.ai (UA: WorkBuddy/5.5.2 WorkBuddy AI/5.5.2 CLI/5.5.2)
+     - 国内版端点: copilot.tencent.com (UA: WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1)
 
   2. 官方 VSCode 插件 (vscode / vsc):
      - X-IDE-Type: VSCode
      - X-IDE-Name: VSCode
      - X-Product: SaaS
      - UA: VSCode/<ver> WorkBuddy/<ver>
-     - 國際版端點: www.workbuddy.ai，國內版端點: www.workbuddy.cn
+     - 国际版端点: www.workbuddy.ai，国内版端点: www.workbuddy.cn
 
   3. 官方 CodeBuddy CLI (cli):
      - X-IDE-Type: CLI
      - X-IDE-Name: CLI
      - X-Product: SaaS
      - UA: CLI/<ver> CodeBuddy/<ver>
-     - 國際版端點: www.workbuddy.ai，國內版端點: copilot.tencent.com
+     - 国际版端点: www.workbuddy.ai，国内版端点: copilot.tencent.com
 """
 
 import uuid
@@ -37,7 +37,7 @@ VALID_PRODUCTS = (PRODUCT_DESKTOP, PRODUCT_VSCODE, PRODUCT_CLI)
 
 
 def normalize_product(value):
-    """把各種寫法收斂成 'workbuddy'、'vscode' 或 'cli'。"""
+    """把各种写法收敛成 'workbuddy'、'vscode' 或 'cli'。"""
     v = str(value or "").strip().lower()
     if v in ("workbuddy", "wb", "desktop"):
         return PRODUCT_DESKTOP
@@ -63,20 +63,20 @@ _ENDPOINTS = {
 
 
 def endpoint_for(realm, product):
-    """回傳 (chat base URL, X-Domain)。身分換了，端點也要跟著換。"""
+    """回传 (chat base URL, X-Domain)。身分换了，端点也要跟着换。"""
     key = ("cn" if realm == "cn" else "intl", normalize_product(product))
     return _ENDPOINTS[key]
 
 
 def domain_for_realm(realm):
-    """X-Domain 的值（預設桌面端）。"""
+    """X-Domain 的值（预设桌面端）。"""
     return endpoint_for(realm, PRODUCT_DESKTOP)[1]
 
 
 def build_identity_headers(product, realm, uid, token,
                            conversation_id=None, enterprise_id="",
                            tenant_id="", department=""):
-    """回傳這一輪要用的身分標頭。product = 'workbuddy' (桌面端), 'vscode' 或 'cli'。"""
+    """回传这一轮要用的身分标头。product = 'workbuddy' (桌面端), 'vscode' 或 'cli'。"""
     product = normalize_product(product)
     is_cn = (realm == "cn")
 

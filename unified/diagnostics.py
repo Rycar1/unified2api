@@ -2,6 +2,7 @@
 from contextlib import closing
 from contextvars import ContextVar
 import json
+import math
 import time
 import uuid
 
@@ -35,8 +36,19 @@ class ResponseObservation:
         if not isinstance(event,dict):
             return
         usage = event.get('usage') or (event.get('response') or {}).get('usage') if isinstance(event.get('response'),dict) else event.get('usage')
+        if not isinstance(usage,dict) and isinstance(event.get('message'),dict): usage=event['message'].get('usage')
         if isinstance(usage,dict) and any(type(usage.get(key)) is int for key in ('prompt_tokens','completion_tokens','input_tokens','output_tokens')):
-            self.usage.update(_usage_from(event))
+            counts=_usage_from({'usage':usage},anthropic=self.path=='/v1/messages')
+            for field,aliases in {'prompt_tokens':('prompt_tokens','input_tokens'),
+                                  'completion_tokens':('completion_tokens','output_tokens')}.items():
+                if not any(alias in usage for alias in aliases): counts.pop(field,None)
+            self.usage.update(counts)
+            details=usage.get('prompt_tokens_details') or usage.get('input_tokens_details') or {}
+            if not isinstance(details,dict): details={}
+            cached=usage.get('prompt_cache_hit_tokens',usage.get('cache_read_input_tokens',details.get('cached_tokens')))
+            if type(cached) is int and 0<=cached<=10**12: self.usage['cached_tokens']=cached
+            credit=usage.get('credit')
+            if type(credit) in (int,float) and math.isfinite(credit) and credit>=0: self.usage['credits']=credit
         error = event.get('error') or event.get('type') in {'error','response.failed','response.incomplete'}
         if error:
             self.error = True
@@ -131,10 +143,14 @@ class Trace:
             if self.response.produced and not any(type(result.get(key)) is int for key in ('prompt_tokens','completion_tokens')):
                 result['_unknown_output'] = True
         for attempt in self.attempts[:-1]:
-            for key in ('prompt_tokens','completion_tokens'):
+            for key in ('prompt_tokens','completion_tokens','cached_tokens','credits'):
                 value = attempt.get(key)
-                if type(value) is int:
+                if type(value) is int or key=='credits' and type(value) is float and math.isfinite(value):
                     result[key] = result.get(key,0)+max(0,value)
+        billed=[self.response.usage,*self.attempts[:-1]]
+        for field in ('cached_tokens','credits'):
+            if any((item.get('prompt_tokens') or item.get('completion_tokens')) and field not in item for item in billed):
+                result.pop(field,None)
         return result
 
 
@@ -143,7 +159,9 @@ class DiagnosticLog(RequestLog):
         super().__init__(path,retention_days)
         with closing(self.connect()) as db:
             present = {row[1] for row in db.execute('PRAGMA table_info(requests)')}
-            for field,kind in {'request_id':'TEXT','key_id':'TEXT','ttft_ms':'REAL','finish_reason':'TEXT','attempts':'TEXT'}.items():
+            for field,kind in {'request_id':'TEXT','key_id':'TEXT','ttft_ms':'REAL','finish_reason':'TEXT','attempts':'TEXT',
+                               'cached_tokens':'INTEGER','credits':'REAL','cost_cny':'REAL','cost_source':'TEXT',
+                               'tokens_per_second':'REAL'}.items():
                 if field not in present:
                     db.execute('ALTER TABLE requests ADD COLUMN '+field+' '+kind)
             db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_request_trace ON requests(request_id)')
@@ -154,16 +172,23 @@ class DiagnosticLog(RequestLog):
         if trace and trace.response.status is not None:
             final = trace.response.finish()
             row = {**row,'ok':final['ok'],'outcome':final['outcome'],**trace.billed_usage()}
+        from .performance import price_usage
+        from .performance import price_attempts
+        priced=price_attempts(trace.attempts) if trace and any(item.get('prompt_tokens') or item.get('completion_tokens') for item in trace.attempts) else price_usage(row)
+        generation=max(0,float(row.get('duration_ms',0))-(trace.response.ttft_ms or 0)) if trace else 0
+        rate=round(row.get('completion_tokens',0)*1000/generation,2) if trace and trace.response.ttft_ms is not None and generation>0 else None
         attempts = [{key:value for key,value in item.items() if key in ATTEMPT_FIELDS and
                      (value is None or isinstance(value,(int,float,bool)) or isinstance(value,str) and len(value)<=200)}
                     for item in (trace.attempts if trace else [])[:40]]
         fields = ['created','path','model','resolved_model','provider','status','ok','duration_ms','prompt_tokens',
-                  'completion_tokens','reasoning_tokens','outcome','request_id','key_id','ttft_ms','finish_reason','attempts']
+                  'completion_tokens','reasoning_tokens','outcome','request_id','key_id','ttft_ms','finish_reason','attempts',
+                  'cached_tokens','credits','cost_cny','cost_source','tokens_per_second']
         model = str(row.get('model') or '')[:200]
         values = [int(time.time()),row['path'],model,row.get('resolved_model'),model.partition('/')[0],row.get('status'),
                   int(row['ok']),round(row['duration_ms']),row.get('prompt_tokens',0),row.get('completion_tokens',0),
                   row.get('reasoning_tokens',0),row['outcome'],trace.request_id if trace else None,trace.key_id if trace else None,
-                  trace.response.ttft_ms if trace else None,trace.response.finish_reason if trace else None,json.dumps(attempts,separators=(',',':'))]
+                  trace.response.ttft_ms if trace else None,trace.response.finish_reason if trace else None,json.dumps(attempts,separators=(',',':')),
+                  row.get('cached_tokens'),row.get('credits'),priced.get('cny'),priced.get('source'),rate]
         with self.lock,closing(self.connect()) as db:
             db.execute('INSERT INTO requests('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',values)
             db.execute('DELETE FROM requests WHERE created<?',(int(time.time())-self.retention_days*86400,))

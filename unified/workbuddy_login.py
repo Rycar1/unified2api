@@ -101,10 +101,17 @@ class WorkBuddyLogin:
         if not isinstance(items, list):
             raise HTTPException(502, "WorkBuddy 模型列表格式无效")
         fields={'name','description','vision','tools','reasoning','reasoning_efforts','default_reasoning_effort','context_window','context_length','max_output_tokens','max_completion_tokens','input_modalities','available','disabled_reason','price_factor'}
+        cleaned=[]
+        for item in items:
+            if not isinstance(item,dict) or not isinstance(item.get('id'),str) or not item['id']: continue
+            item=dict(item)
+            if (item.get('limit_sources') or {}).get('context')=='default':
+                for field in ('context_length','context_window'): item.pop(field,None)
+            cleaned.append(item)
         return [{**{key:value for key,value in item.items() if key in fields},
                  "id": "workbuddy/" + item["id"], "object": "model", "owned_by": "workbuddy",
                  "provider_name": "WorkBuddy AI 国外"}
-                for item in items if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
+                for item in cleaned]
 
     async def relay(self, path, body, scope, receive, send):
         accounts = await self.accounts()
@@ -147,6 +154,11 @@ class WorkBuddyLogin:
 
     async def operate(self, aid, action, account=None):
         account = account or await self.account(aid)
+        if action=='checkin' and getattr(self,'runtime',None) and self.runtime.proxy:
+            live=self.runtime.proxy.POOL.get(aid)
+            if not live:
+                raise HTTPException(404,'WorkBuddy 账号不存在')
+            return {'id':aid,**await asyncio.to_thread(self.runtime.activity.run,live)}
         if action == "checkin" and str(account.get("lastDailyChat") or "").startswith(time.strftime("%Y-%m-%d")):
             credits = account.get("credits")
             remaining = credits.get("remain") if isinstance(credits, dict) else None

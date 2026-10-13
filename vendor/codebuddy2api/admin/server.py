@@ -212,8 +212,9 @@ class AdminMiddleware:
             if message["type"] == "http.disconnect":
                 return
             size += len(message.get("body", b""))
-            if size > MAX_BODY:
-                response = JSONResponse({"detail": "文件或请求超过 1 MB"}, 413)
+            body_limit=48*1024*1024 if scope.get('path')=='/admin/api/unified/backup/import' else MAX_BODY
+            if size > body_limit:
+                response = JSONResponse({"detail": "文件或请求超过允许大小"}, 413)
                 return await response(scope, receive, send)
             messages.append(message)
             if not message.get("more_body", False):

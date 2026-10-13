@@ -27,7 +27,8 @@ from fastapi import HTTPException
 
 ROUTE_ID = re.compile(r"^[a-z][a-z0-9_.-]{0,39}$")
 BACKUP_MAGIC = b"U2API1\0"
-MAX_BACKUP = 11 * 1024 * 1024
+MAX_BACKUP = 32 * 1024 * 1024
+MAX_BACKUP_UNPACKED = 256 * 1024 * 1024
 
 
 class UnifiedConfig:
@@ -279,7 +280,7 @@ class RequestLog:
             db.commit()
 
 
-def _usage_from(value):
+def _usage_from(value,anthropic=False):
     if not isinstance(value, dict):
         return {}
     usage = value.get("usage")
@@ -288,10 +289,18 @@ def _usage_from(value):
     if not isinstance(usage, dict):
         return {}
     details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+    if not isinstance(details,dict): details={}
+    def count(value):
+        try:
+            return max(0,min(int(value or 0),10**12))
+        except (TypeError,ValueError,OverflowError): return 0
+    prompt=count(usage.get('prompt_tokens',usage.get('input_tokens',0)))
+    if anthropic and 'prompt_tokens' not in usage and 'input_tokens' in usage:
+        prompt+=count(usage.get('cache_read_input_tokens'))+count(usage.get('cache_creation_input_tokens'))
     return {
-        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
-        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
-        "reasoning_tokens": int(details.get("reasoning_tokens", usage.get("completion_thinking_tokens", 0)) or 0),
+        "prompt_tokens": prompt,
+        "completion_tokens": count(usage.get("completion_tokens", usage.get("output_tokens", 0))),
+        "reasoning_tokens": count(details.get("reasoning_tokens", usage.get("completion_thinking_tokens", 0))),
     }
 
 
@@ -407,7 +416,7 @@ class AutomationManager:
     def update(self, value):
         old = self.settings()
         result = dict(old)
-        for key in ("auto_checkin", "auto_refresh", "notify_failures"):
+        for key in ("auto_checkin", "auto_refresh", "notify_failures", "auto_benefits"):
             if key in value:
                 if type(value[key]) is not bool:
                     raise HTTPException(400, key + " 必须是布尔值")
@@ -433,7 +442,7 @@ class AutomationManager:
         return result
 
     async def execute(self, action, manual=False):
-        if action not in {"checkin", "refresh"}:
+        if action not in {"checkin", "refresh", "benefits"}:
             raise HTTPException(400, "不支持的自动任务")
         if self.running.locked():
             raise HTTPException(409, "已有自动任务正在运行")
@@ -487,6 +496,9 @@ class AutomationManager:
                 datetime.fromtimestamp(item.get("time", 0)).date() == now.date() for item in history)
             if settings.get("auto_checkin") and now.strftime("%H:%M") >= settings.get("checkin_time", "09:00") and not checked_today:
                 await self.execute("checkin")
+            benefits_today=any(item.get('action')=='benefits' and datetime.fromtimestamp(item.get('time',0)).date()==now.date() for item in history)
+            if settings.get('auto_benefits') and now.strftime('%H:%M')>=settings.get('checkin_time','09:00') and not benefits_today:
+                await self.execute('benefits')
             if settings.get("auto_refresh") and self.clock() - self.last_refresh >= settings.get("refresh_minutes", 30) * 60:
                 await self.execute("refresh")
 
@@ -512,12 +524,24 @@ class BackupManager:
                 for path in root.rglob("*"):
                     if not path.is_file() or path.is_symlink():
                         continue
-                    if not include_logs and path.name.startswith("request_logs.sqlite"):
+                    relative=path.relative_to(root)
+                    if name=='management' and relative.parts[0]=='releases':
                         continue
-                    zf.write(path, (Path(name) / path.relative_to(root)).as_posix())
+                    if not include_logs and (path.name.startswith("request_logs.sqlite") or name=='workbuddy-usage'):
+                        continue
+                    if path.name.endswith(('-wal','-shm')) and Path(str(path).rsplit('-',1)[0]).suffix in {'.sqlite','.db'}:
+                        continue
+                    if path.suffix in {'.sqlite','.db'}:
+                        with tempfile.TemporaryDirectory(prefix='unified-db-snapshot-') as temporary:
+                            snapshot=Path(temporary)/path.name
+                            with closing(sqlite3.connect(path)) as source,closing(sqlite3.connect(snapshot)) as target:
+                                source.backup(target)
+                            zf.write(snapshot,(Path(name)/relative).as_posix())
+                    else:
+                        zf.write(path, (Path(name) / relative).as_posix())
         plain = archive.getvalue()
         if len(plain) > MAX_BACKUP:
-            raise HTTPException(413, "备份内容超过 11 MB，请取消包含调用记录后重试")
+            raise HTTPException(413, "备份内容超过 32 MB，请取消包含调用记录后重试")
         salt, nonce = os.urandom(16), os.urandom(12)
         encrypted = AESGCM(self._key(password, salt)).encrypt(nonce, plain, BACKUP_MAGIC)
         return BACKUP_MAGIC + salt + nonce + encrypted
@@ -536,7 +560,7 @@ class BackupManager:
         except Exception:
             raise HTTPException(400, "备份密码错误或文件已损坏")
         if len(plain) > MAX_BACKUP:
-            raise HTTPException(413, "备份解压内容超过 11 MB")
+            raise HTTPException(413, "备份压缩内容超过 32 MB")
         stage = Path(tempfile.mkdtemp(prefix="unified-restore-"))
         try:
             with zipfile.ZipFile(io.BytesIO(plain)) as zf:
@@ -544,8 +568,8 @@ class BackupManager:
                 if "backup.json" not in names:
                     raise HTTPException(400, "备份缺少版本信息")
                 total = sum(info.file_size for info in zf.infolist())
-                if total > MAX_BACKUP:
-                    raise HTTPException(413, "备份解压内容超过 11 MB")
+                if total > MAX_BACKUP_UNPACKED:
+                    raise HTTPException(413, "备份展开内容超过 256 MB")
                 for info in zf.infolist():
                     path = Path(info.filename)
                     if path.is_absolute() or ".." in path.parts:
@@ -559,11 +583,16 @@ class BackupManager:
                     continue
                 destination.mkdir(parents=True, exist_ok=True)
                 for child in list(destination.iterdir()):
+                    if name=='management' and child.name=='releases':
+                        continue
+                    if not child.resolve().is_relative_to(destination.resolve()):
+                        raise HTTPException(400,'恢复目标包含指向数据目录外的链接')
                     if child.is_dir() and not child.is_symlink():
                         shutil.rmtree(child)
                     else:
                         child.unlink(missing_ok=True)
-                shutil.copytree(source, destination, dirs_exist_ok=True)
+                shutil.copytree(source, destination, dirs_exist_ok=True,
+                    ignore=(lambda directory,names:['releases'] if Path(directory)==source and name=='management' else []))
             return {"ok": True, "restart_required": True}
         finally:
             shutil.rmtree(stage, ignore_errors=True)

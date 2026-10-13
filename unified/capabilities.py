@@ -20,7 +20,7 @@ class ModelCapabilities:
         chat_only = prefix in {'trae','monkeycode'}
         protocols = {'chat':'supported' if converted or chat_only else 'unknown',
                      'responses':'converted' if converted else 'unsupported' if chat_only else 'unknown',
-                     'messages':'converted' if converted and prefix!='workbuddy' else 'unsupported'}
+                     'messages':'converted' if converted else 'unsupported'}
         result = {'vision':None,'tools':None,'context_window':None,'compact':False if converted or chat_only else None,
                   'protocols':protocols,'sources':{'protocols':'gateway','compact':'gateway' if converted or chat_only else 'unknown'}}
         for field in ('vision','tools','reasoning'):

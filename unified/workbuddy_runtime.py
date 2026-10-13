@@ -21,6 +21,12 @@ class EmbeddedWorkBuddy:
         self.proxy = importlib.import_module("wb_proxy")
         self.proxy.USAGE_DIR = str(self.usage_dir)
         self.proxy.USAGE_LOG = str(Path(self.usage_dir) / "usage.jsonl")
+        for name,filename in {'LIMIT_EVENTS_FILE':'limit-events.jsonl','ESTIMATE_DAILY_FILE':'estimate-daily.json',
+                              'RECENT_INDEX_FILE':'usage-recent-index.json'}.items():
+            if hasattr(self.proxy,name): setattr(self.proxy,name,str(Path(self.usage_dir)/filename))
+        from .workbuddy_hooks import install
+        install(self.proxy)
+        if hasattr(self.proxy,'wb_activity'): self.proxy.wb_activity.set_data_dir(str(self.usage_dir))
         args = SimpleNamespace(accounts_dir=str(self.accounts_dir), api_key=self.api_key,
             panel_password=self.admin_key, system_prompt="You are a helpful assistant.", lan=False)
         # Bind before starting the scheduler; a port conflict must fail startup.
@@ -29,6 +35,10 @@ class EmbeddedWorkBuddy:
         self.server.block_on_close = False
         try:
             self.proxy._bootstrap_runtime(args)
+            from .workbuddy_activity import ActivityConfig,WebActivity
+            config=getattr(self,'config',None) or ActivityConfig(Path(self.accounts_dir)/'.unified-web-activity')
+            self.activity=WebActivity(config)
+            self.activity.install(self.proxy)
             self.thread = threading.Thread(target=self.server.serve_forever, name="workbuddy-internal", daemon=True)
             self.thread.start()
         except Exception:
@@ -38,6 +48,12 @@ class EmbeddedWorkBuddy:
             raise
 
     def stop(self):
+        if self.proxy:
+            for name in ('PRICING','CREDITS_REFRESHER','UPDATES'):
+                worker=getattr(self.proxy,name,None)
+                if worker and hasattr(worker,'stop'):
+                    worker.stop()
+                    if isinstance(worker,threading.Thread) and worker.is_alive(): worker.join(timeout=3)
         if self.proxy and self.proxy.SCHEDULER:
             self.proxy.SCHEDULER.stop()
             scheduler_thread = self.proxy.SCHEDULER._thread

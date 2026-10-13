@@ -158,7 +158,7 @@ class AccountPool:
             raise BillingError("上游未接受该操作，请检查账号或稍后重试", code=d.get("code") if isinstance(d, dict) else None)
         return d.get("data")
 
-    def credits(self, client, headers):
+    def credits(self, client, headers, include_details=False):
         packages = []
         now = datetime.fromtimestamp(self.clock(), CN)
         for page in range(1, 101):
@@ -173,7 +173,13 @@ class AccountPool:
                 raise BillingError("积分数据格式异常，上次余额已保留")
             packages.extend(current)
             if len(packages) >= total:
-                return summarize_packages(packages)
+                result=summarize_packages(packages)
+                if include_details:
+                    fields={'PackageName','PackageCode','PackageStartTime','PackageEndTime','CapacityRemain','CapacityRemainPrecise',
+                            'CapacitySize','CapacitySizePrecise','CycleCapacityRemain','CycleCapacityRemainPrecise','CycleCapacitySize',
+                            'CycleCapacitySizePrecise','GrantReason','CreatedReason','Status'}
+                    result['details']=[{k:v for k,v in item.items() if k in fields} for item in packages]
+                return result
             if not current:
                 break
         raise BillingError("积分包分页不完整，上次余额已保留")
