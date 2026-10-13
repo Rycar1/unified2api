@@ -9,6 +9,12 @@ from fastapi import HTTPException,Request
 PROVIDERS={'trae','codebuddy','monkeycode','qoder','qoder-cn','workbuddy_intl'}
 
 
+def identity(provider, row):
+    if provider=='codebuddy':
+        return row.get('uid'), row.get('enterpriseId','')
+    return row.get('uid')
+
+
 def import_rows(body):
     provider=body.get('provider')
     if provider not in PROVIDERS: raise HTTPException(400,'请选择支持的平台')
@@ -27,9 +33,12 @@ def import_rows(body):
         record=value.get('user',value) if isinstance(value,dict) else {}
         if isinstance(record,dict): record=record.get('auth_user_info_raw',record)
         uid=record.get('uid') or record.get('userId') or record.get('id') if isinstance(record,dict) else None
-        if provider in {'codebuddy','trae'} and isinstance(value,dict): uid=(value.get('account') or {}).get('uid') or uid
+        account=value.get('account') if isinstance(value,dict) else None
+        if not isinstance(account,dict): account={}
+        if provider in {'codebuddy','trae'}: uid=account.get('uid') or uid
         name=record.get('nickname') or record.get('name') if isinstance(record,dict) else None
         result.append({'index':index,'valid':valid,'uid':str(uid) if uid else None,
+                       'enterpriseId':str(account.get('enterpriseId') or '') if provider=='codebuddy' else '',
                        'name':str(name or body.get('name') or '账号 '+str(index+1))[:60],
                        'region':'cn' if provider=='qoder-cn' else body.get('region','global'),'value':value})
     return provider,result
@@ -55,7 +64,7 @@ class BulkImport:
                     row['name']=normalized.get('nickname') or row['name']
             except (HTTPException,ValueError,TypeError,KeyError,AttributeError): row['valid']=False
         existing={}
-        if provider=='codebuddy': existing={str(row.get('uid')):row['id'] for row in self.store.account_rows()}
+        if provider=='codebuddy': existing={identity(provider,row):row['id'] for row in self.store.account_rows() if row.get('uid')}
         elif provider.startswith('qoder'):
             region='cn' if provider=='qoder-cn' else body.get('region','global')
             existing={row['uid']:row['id'] for row in await self.qoder.accounts() if row['region']==region}
@@ -63,8 +72,8 @@ class BulkImport:
         elif provider in {'trae','monkeycode'}:
             code,value=await self.api.native.request('GET','/admin/api/accounts' if provider=='trae' else '/monkey/admin/accounts')
             if code==200: existing={str(row['uid']):row['uid'] for row in value.get('accounts',[])}
-        for row in rows: row['exists']=bool(row['uid'] and row['uid'] in existing)
-        public=lambda row:{key:row.get(key) for key in ('index','valid','uid','name','region','exists')}
+        for row in rows: row['exists']=bool(row['uid'] and identity(provider,row) in existing)
+        public=lambda row:{key:row.get(key) for key in ('index','valid','uid','enterpriseId','name','region','exists')}
         if body.get('preview',True): return {'provider':provider,'rows':[public(row) for row in rows],'total':len(rows)}
         overwrite=body.get('overwrite') is True
         headers={key:value for key,value in req.headers.items() if key.lower() in {'cookie','x-csrf-token'}}
@@ -73,7 +82,7 @@ class BulkImport:
             for row in rows:
                 result=public(row)
                 if not row['valid']: result.update(ok=False,state='invalid',message='凭据格式无效')
-                elif row['uid'] in existing and not overwrite: result.update(ok=True,state='skipped',message='已有账号，已跳过')
+                elif identity(provider,row) in existing and not overwrite: result.update(ok=True,state='skipped',message='已有账号，已跳过')
                 else:
                     value=row['value']
                     try:
@@ -84,26 +93,25 @@ class BulkImport:
                             if report.get('invalid'): raise ValueError('invalid credential')
                             state='updated' if report.get('updated') else 'skipped' if report.get('skipped') else 'imported'
                             result.update(ok=True,state=state,message='已有账号，已跳过' if state=='skipped' else '账号已导入')
-                        elif provider=='codebuddy' and row['uid'] in existing:
-                            item=self.store.data['accounts'][existing[row['uid']]]
-                            self.store.validate_credential(value)
-                            from admin.server import write_json
-                            with self.store.lock:
-                                write_json(self.store.file_for(item),value)
-                                self.store.managers.pop(existing[row['uid']],None)
-                                self.store.sync_active()
-                            result.update(ok=True,state='updated',message='已有凭据已更新')
+                        elif provider=='codebuddy':
+                            imported=self.store.save_browser_account(value,row['name'],overwrite=overwrite)
+                            existing[identity(provider,row)]=imported['account_id']
+                            state='skipped' if imported.get('skipped') else 'updated' if imported.get('updated') else 'imported'
+                            result.update(ok=True,state=state,message='已有账号，已跳过' if state=='skipped' else '账号已导入')
                         else:
                             target='qoder' if provider.startswith('qoder') else provider
                             path='/admin/api/accounts' if provider=='codebuddy' else '/admin/api/unified/'+target+'/accounts'
                             payload={'name':row['name'],'credential':value,'overwrite':overwrite,'region':row['region']}
-                            if provider=='monkeycode' and isinstance(value,dict) and value.get('cookie'): payload=value
+                            if provider=='monkeycode' and isinstance(value,dict) and value.get('cookie'):
+                                payload={**payload,'cookie':value['cookie']}
+                                payload.pop('credential',None)
                             response=await client.post(path,headers=headers,json=payload)
                             if response.status_code>=300: raise HTTPException(response.status_code,'凭据校验或授权交换失败')
-                            result.update(ok=True,state='imported',message='账号已导入')
                             imported=response.json()
-                            if row['uid']: existing[row['uid']]=imported.get('id') or imported.get('uid') or existing.get(row['uid'],row['uid'])
-                        if row['uid'] and result.get('ok'): existing[row['uid']]=existing.get(row['uid'],row['uid'])
+                            state='skipped' if imported.get('skipped') else 'updated' if imported.get('updated') else 'imported'
+                            result.update(ok=True,state=state,message='已有账号，已跳过' if state=='skipped' else '账号已导入')
+                            if row['uid']: existing[identity(provider,row)]=imported.get('id') or imported.get('uid') or existing.get(identity(provider,row),row['uid'])
+                        if row['uid'] and result.get('ok'): existing[identity(provider,row)]=existing.get(identity(provider,row),row['uid'])
                     except (HTTPException,ValueError,TypeError,OSError):
                         result.update(ok=False,state='failed',message='凭据校验或授权交换失败，请检查这条账号')
                 results.append(result)

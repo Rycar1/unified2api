@@ -109,7 +109,7 @@ class Store:
     def save(self):
         write_json(self.path, self.data)
 
-    def save_browser_account(self, doc, name):
+    def save_browser_account(self, doc, name, overwrite=True):
         self.validate_credential(doc)
         with self.lock:
             identity = (doc["account"]["uid"], doc["account"].get("enterpriseId", ""))
@@ -119,6 +119,8 @@ class Store:
                 except (ValueError, OSError):
                     continue
                 if (old.get("account", {}).get("uid"), old.get("account", {}).get("enterpriseId", "")) == identity:
+                    if not overwrite:
+                        return {"account_id": aid, "updated": False, "skipped": True}
                     current = self.manager_for(aid, item)
                     if current:
                         with current._lock:
@@ -167,7 +169,7 @@ class Store:
             try:
                 doc = json.loads(self.file_for(item).read_text(encoding="utf-8"))
                 expiry = doc["auth"].get("expiresAt", 0)
-                row.update({"nickname": str(doc["account"].get("nickname") or ""), "uid": str(doc["account"].get("uid") or ""), "expires_at": expiry, "expired": expiry < time.time() * 1000, "refresh_available": bool(doc["auth"].get("refreshToken")), "status": "ready"})
+                row.update({"nickname": str(doc["account"].get("nickname") or ""), "uid": str(doc["account"].get("uid") or ""), "enterpriseId": str(doc["account"].get("enterpriseId") or ""), "expires_at": expiry, "expired": expiry < time.time() * 1000, "refresh_available": bool(doc["auth"].get("refreshToken")), "status": "ready"})
             except (ValueError, OSError, KeyError):
                 row.update({"status": "invalid", "expired": True, "expires_at": 0, "refresh_available": False})
             result.append(row)

@@ -577,22 +577,68 @@ class BackupManager:
                     if path.parts and path.parts[0] != "backup.json" and path.parts[0] not in self.roots:
                         raise HTTPException(400, "备份包含未知数据目录")
                 zf.extractall(stage)
-            for name, destination in self.roots.items():
-                source = stage / name
-                if not source.exists():
-                    continue
-                destination.mkdir(parents=True, exist_ok=True)
-                for child in list(destination.iterdir()):
-                    if name=='management' and child.name=='releases':
-                        continue
-                    if not child.resolve().is_relative_to(destination.resolve()):
-                        raise HTTPException(400,'恢复目标包含指向数据目录外的链接')
-                    if child.is_dir() and not child.is_symlink():
-                        shutil.rmtree(child)
-                    else:
-                        child.unlink(missing_ok=True)
-                shutil.copytree(source, destination, dirs_exist_ok=True,
-                    ignore=(lambda directory,names:['releases'] if Path(directory)==source and name=='management' else []))
+            self._replace_roots(stage)
             return {"ok": True, "restart_required": True}
         finally:
             shutil.rmtree(stage, ignore_errors=True)
+
+    @staticmethod
+    def _remove_child(child, destination):
+        if not child.resolve().is_relative_to(destination.resolve()):
+            raise HTTPException(400, '恢复目标包含指向数据目录外的链接')
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink(missing_ok=True)
+
+    def _replace_roots(self, stage):
+        pending=[]
+        # Check every root before moving any live data. Preserved release state is untouched.
+        for name, destination in self.roots.items():
+            source=stage/name
+            if not source.exists():
+                continue
+            children=[]
+            if destination.exists():
+                if not destination.is_dir():
+                    raise HTTPException(400, '恢复目标不是数据目录')
+                children=[child for child in destination.iterdir()
+                          if not (name=='management' and child.name=='releases')]
+                for child in children:
+                    for candidate in (child, *child.rglob('*')) if child.is_dir() and not child.is_symlink() else (child,):
+                        if not candidate.resolve().is_relative_to(destination.resolve()):
+                            raise HTTPException(400, '恢复目标包含指向数据目录外的链接')
+            pending.append((name, source, destination, children))
+        changed=[]
+        try:
+            for name, source, destination, children in pending:
+                destination.mkdir(parents=True, exist_ok=True)
+                rollback=Path(tempfile.mkdtemp(prefix='.unified-rollback-',dir=destination))
+                moved=[]
+                changed.append((name,destination,rollback,moved,{child.name for child in children}))
+                for child in children:
+                    os.replace(child,rollback/child.name)
+                    moved.append(child.name)
+                shutil.copytree(source,destination,dirs_exist_ok=True,
+                    ignore=(lambda directory,names:['releases'] if Path(directory)==source and name=='management' else []))
+        except Exception:
+            rollback_failed=False
+            for name,destination,rollback,moved,original_names in reversed(changed):
+                try:
+                    for child in list(destination.iterdir()):
+                        if child==rollback or name=='management' and child.name=='releases':
+                            continue
+                        # A move can fail mid-root; leave originals not yet moved intact.
+                        if child.name in original_names and child.name not in moved:
+                            continue
+                        self._remove_child(child,destination)
+                    for filename in moved:
+                        os.replace(rollback/filename,destination/filename)
+                    shutil.rmtree(rollback)
+                except Exception:
+                    # Keep the rollback directory for recovery rather than deleting originals.
+                    rollback_failed=True
+            raise HTTPException(500, '恢复失败，原始数据已保留在回滚目录' if rollback_failed else '恢复失败，已回滚到原始数据') from None
+        else:
+            for _,destination,rollback,_,_ in changed:
+                self._remove_child(rollback,destination)

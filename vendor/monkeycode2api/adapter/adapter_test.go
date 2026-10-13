@@ -8,6 +8,7 @@ import (
 	"monkeycode2api/internal/upstream"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,6 +70,18 @@ func TestAccountLifecycle(t *testing.T) {
 	saved, err := cred.LoadDir(dir)
 	if err != nil || saved[0].Nickname != "renamed" {
 		t.Fatal("persistence failed")
+	}
+	before, err := os.ReadFile(saved[0].Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped := call("POST", "/admin/accounts", `{"cookie":"session=secret","name":"must-not-replace","overwrite":false}`)
+	if !strings.Contains(skipped.Body.String(), `"skipped":true`) || s.p.Pick() != nil {
+		t.Fatal("duplicate import must preserve disabled state")
+	}
+	after, err := os.ReadFile(saved[0].Path(dir))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("duplicate import changed the saved credential or name")
 	}
 	call("POST", "/admin/accounts", `{"cookie":"session=secret","name":"updated"}`)
 	if len(s.p.Accounts()) != 1 || s.p.Pick() == nil || s.p.Pick().Nickname != "updated" {

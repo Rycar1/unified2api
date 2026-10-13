@@ -103,6 +103,7 @@ func (s *service) accounts(w http.ResponseWriter, r *http.Request) {
 		Cookie     string        `json:"cookie"`
 		Name       string        `json:"name"`
 		Credential *cred.Account `json:"credential"`
+		Overwrite  *bool         `json:"overwrite"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body) != nil {
 		fail(w, 400, "请输入 Cookie 或 JSON 凭据")
@@ -139,6 +140,14 @@ func (s *service) accounts(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if body.Overwrite != nil && !*body.Overwrite {
+		for _, existing := range s.p.Accounts() {
+			if existing.UID == a.UID {
+				reply(w, 200, map[string]any{"id": a.UID, "ok": true, "skipped": true})
+				return
+			}
+		}
+	}
 	if a.SaveFile(s.dir) != nil {
 		fail(w, 500, "账号保存失败")
 		return
