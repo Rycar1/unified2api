@@ -339,7 +339,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
 
     @app.get("/admin/assets/{filename}")
     async def asset(filename: str):
-        if filename not in ("app.js", "style.css", "brand.png"):
+        if filename not in ("app.js", "style.css", "brand.png", "theme-init.js"):
             raise HTTPException(404)
         return FileResponse(STATIC / filename)
 

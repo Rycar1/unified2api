@@ -21,6 +21,7 @@ import {
   KeyRound,
   LogOut,
   Menu,
+  Monitor,
   Network,
   Pencil,
   Play,
@@ -47,6 +48,8 @@ import {
 import { MotionRows, PagePresence, useDialogFocus, useMedia, DrawerFocus } from './motion'
 import { TasksPage, QuotaDialog, ProviderSettings, PerformancePage, BulkImportDialog, ClientsPage } from './extensions'
 import './refresh.css'
+import { useTheme, ThemeToggle } from './theme'
+import './theme.css'
 
 const pageMeta = {
   tasks: ['福利任务', '领取账号福利，查看任务进度和额度发放'],
@@ -161,7 +164,7 @@ async function request(path, { method = 'GET', body, csrf = '' } = {}) {
   return data
 }
 
-function Login({ onLogin }) {
+function Login({ onLogin, themeControl }) {
   const [key, setKey] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -180,7 +183,10 @@ function Login({ onLogin }) {
   return (
     <main className="login-shell">
       <section className="login-panel glass-panel">
-        <div className="wordmark">Unified</div>
+        <div className="login-brand">
+          <div className="wordmark">Unified</div>
+          {themeControl}
+        </div>
         <p className="kicker">本地模型网关</p>
         <h1>登录控制台</h1>
         <p className="muted">管理账号、模型和统一 API 接入。</p>
@@ -2386,11 +2392,13 @@ function SettingsPage({ settings, theme, onThemeChange, onSave, onNavigate }) {
           {[
             ['light', Sun, '浅色'],
             ['dark', Moon, '深色'],
+            ['system', Monitor, '跟随系统'],
           ].map(([id, Icon, label]) => (
             <button
               type="button"
               key={id}
               className={`theme-option ${theme === id ? 'active' : ''}`}
+              aria-pressed={theme === id}
               onClick={() => onThemeChange(id)}
             >
               <Icon size={18} />
@@ -2829,7 +2837,7 @@ function App() {
   const [editingConnection, setEditingConnection] = useState(null)
   const [editingRoute, setEditingRoute] = useState(null)
   const [consoleSettings, setConsoleSettings] = useState({ retention_days: 365, auto_refresh_seconds: 0 })
-  const [theme, setTheme] = useState(() => window.localStorage.getItem('unified-theme') || 'light')
+  const { theme, resolvedTheme, setTheme } = useTheme()
   const [refreshNonce, setRefreshNonce] = useState(0)
 
   const load = useCallback(async () => {
@@ -2859,10 +2867,6 @@ function App() {
   useEffect(() => {
     if (!mobile) setDrawer(false)
   }, [mobile])
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    window.localStorage.setItem('unified-theme', theme)
-  }, [theme])
   useEffect(() => {
     const interval = Number(consoleSettings.auto_refresh_seconds || 0)
     if (!authenticated || !interval) return undefined
@@ -2902,11 +2906,13 @@ function App() {
         <span>正在连接控制台</span>
       </div>
     )
-  if (!authenticated) return <Login onLogin={login} />
+  const themeControl = <ThemeToggle resolvedTheme={resolvedTheme} onChange={setTheme} />
+  if (!authenticated) return <Login onLogin={login} themeControl={themeControl} />
   if (!data && loadError)
     return (
       <main className="login-shell">
         <section className="login-panel glass-panel">
+          {themeControl}
           <h1>连接暂时失败</h1>
           <p className="form-error" role="alert">
             {loadError}
@@ -3044,6 +3050,7 @@ function App() {
             <span>Unified / {title}</span>
           </div>
           <div className="top-actions">
+            {themeControl}
             <button className="icon-action" onClick={load} aria-label="刷新">
               <RefreshCw size={16} className={loading ? 'spin' : ''} />
             </button>
