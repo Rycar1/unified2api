@@ -604,6 +604,7 @@ export function ReleasesPage({ request, csrf }) {
   }
   const version = (value) => (value && value !== 'dev' ? value.slice(0, 12) : '本地开发版本')
   const running = ['queued', 'running'].includes(operation?.status)
+  const downloadingWithoutTotal = operation?.phase === 'download' && !operation.total_bytes
   return (
     <section className="content-card release-card">
       <div className="section-head">
@@ -668,9 +669,9 @@ export function ReleasesPage({ request, csrf }) {
         <div className={`release-progress ${operation.status === 'failed' ? 'error' : ''}`} role="status">
           <div>
             <strong>{releasePhase(operation.phase)}</strong>
-            <span>{operation.progress || 0}%</span>
+            <span>{downloadingWithoutTotal ? '下载中' : `${operation.progress || 0}%`}</span>
           </div>
-          <progress value={operation.progress || 0} max="100" />
+          <progress value={downloadingWithoutTotal ? undefined : operation.progress || 0} max="100" aria-label={downloadingWithoutTotal ? '正在下载源码' : '版本更新进度'} />
           {operation.phase === 'download' && operation.downloaded_bytes != null && (
             <p>已下载 {(operation.downloaded_bytes / 1024 / 1024).toFixed(1)} MB
               {operation.total_bytes > 0 ? ` / ${(operation.total_bytes / 1024 / 1024).toFixed(1)} MB` : ''}
