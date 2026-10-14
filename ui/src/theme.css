@@ -49,6 +49,49 @@
   background: var(--surface-solid);
   color: var(--ink);
 }
+input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  flex: 0 0 18px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+:root[data-theme='dark'] .setup-list button {
+  background: var(--surface-solid);
+  color: var(--ink);
+  border-color: var(--line);
+}
+:root[data-theme='dark'] .setup-list button:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+:root[data-theme-transition='reveal'] *,
+:root[data-theme-transition='reveal'] *::before,
+:root[data-theme-transition='reveal'] *::after {
+  transition: none !important;
+}
+:root[data-theme-transition='reveal']::view-transition,
+:root[data-theme-transition='reveal']::view-transition-group(root),
+:root[data-theme-transition='reveal']::view-transition-image-pair(root),
+:root[data-theme-transition='reveal']::view-transition-old(root),
+:root[data-theme-transition='reveal']::view-transition-new(root) {
+  pointer-events: none;
+}
+:root[data-theme-transition='reveal']::view-transition-group(root),
+:root[data-theme-transition='reveal']::view-transition-old(root),
+:root[data-theme-transition='reveal']::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+:root[data-theme-transition='reveal']::view-transition-old(root) {
+  z-index: 1;
+}
+:root[data-theme-transition='reveal']::view-transition-new(root) {
+  z-index: 2;
+}
 @media (max-width: 560px) {
   .theme-options {
     grid-template-columns: 1fr;

@@ -2398,8 +2398,9 @@ function SettingsPage({ settings, theme, onThemeChange, onSave, onNavigate }) {
               type="button"
               key={id}
               className={`theme-option ${theme === id ? 'active' : ''}`}
+              data-theme-value={id}
               aria-pressed={theme === id}
-              onClick={() => onThemeChange(id)}
+              onClick={(event) => onThemeChange(id, event)}
             >
               <Icon size={18} />
               <span>{label}</span>
