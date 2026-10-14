@@ -101,7 +101,10 @@ class API:
         if self.routes:
             models += self.routes.public_models()
         from .model_metadata import enrich_model
-        models=[enrich_model(model) for model in models]
+        catalog_rows = {}
+        for model in models:
+            catalog_rows.setdefault(model['id'], model)
+        models = [enrich_model(model) for model in catalog_rows.values()]
         if self.capabilities:
             models = [{**model,"capabilities":self.capabilities.describe(model)} for model in models]
             catalog = {model['id']:model['capabilities'] for model in models}

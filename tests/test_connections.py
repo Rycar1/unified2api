@@ -21,9 +21,12 @@ class Native:
         self.next_trae_balance = 2000
         self.monkey_remaining = 12500
         self.balance_error = False
+        self.model_rows = [{"id": "model"}]
 
     async def request(self, method, path, body=b""):
         self.requests.append((method, path))
+        if path == "/v1/models":
+            return 200, {"data": self.model_rows}
         if path == "/admin/api/accounts":
             return 200, {"accounts": [{"uid": "test", "nickname": "Test", "enabled": True, "disabled": False, "cooling": False, "expires_at": 0, "remaining": self.trae_remaining}]}
         if path == "/admin/api/accounts/test/balance":
@@ -69,6 +72,34 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
     async def add(self):
         response = await self.client.post(self.path, headers=self.csrf, json=self.body)
         self.assertEqual(response.status_code, 200, response.text)
+
+    async def test_public_models_remove_repeated_ids_and_preserve_first_metadata(self):
+        self.native.model_rows = [
+            {"id": "glm-5.2", "name": "First entry", "context_window": 32768},
+            {"id": "DeepSeek-V4-Flash"},
+            {"id": "glm-5.2", "name": "Duplicate entry", "context_window": 8192},
+            {"id": "DeepSeek-V4-Flash"},
+        ]
+        response = await self.client.get('/v1/models', headers=self.api_headers)
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()['data']
+        ids = [row['id'] for row in rows]
+        self.assertEqual(len(ids), len(set(ids)))
+        trae = [row for row in rows if row['id'].startswith('trae/')]
+        self.assertEqual([row['id'] for row in trae], ['trae/glm-5.2', 'trae/DeepSeek-V4-Flash'])
+        self.assertEqual(trae[0]['name'], 'First entry')
+        self.assertEqual(trae[0]['context_window'], 32768)
+
+    async def test_overview_model_counts_use_distinct_full_ids(self):
+        self.native.model_rows = [{"id": "model"}, {"id": "model"}]
+        response = await self.client.get('/admin/api/unified/overview')
+        self.assertEqual(response.status_code, 200)
+        models = response.json()['models']
+        ids = [row['id'] for row in models]
+        self.assertEqual(len(ids), len(set(ids)))
+        # The same upstream model name on different platforms remains distinct.
+        self.assertIn('trae/model', ids)
+        self.assertIn('monkeycode/model', ids)
 
     async def test_qoder_region_prefixes_cannot_be_used_by_custom_services(self):
         for prefix in ('qoder','qoder-cn'):

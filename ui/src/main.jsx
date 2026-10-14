@@ -50,6 +50,7 @@ import './refresh.css'
 import { useTheme, ThemeToggle } from './theme'
 import './theme.css'
 import { Dashboard } from './dashboard'
+import { uniqueModels } from './model-list'
 
 const pageMeta = {
   tasks: ['福利任务', '领取账号福利，查看任务进度和额度发放'],
@@ -2781,7 +2782,7 @@ function App() {
         request('session'),
         request('unified/settings'),
       ])
-      setData(overview)
+      setData({ ...overview, models: uniqueModels(overview.models) })
       setCsrf(session.csrf)
       setConsoleSettings(preferences.settings)
       setAuthenticated(true)
