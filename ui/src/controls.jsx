@@ -489,6 +489,7 @@ const releasePhase = (value) =>
     queued: '等待执行',
     prepare: '准备版本',
     download: '下载代码',
+    validate: '校验代码',
     build: '构建新版本',
     switch: '切换服务',
     health: '健康检查',
@@ -507,7 +508,7 @@ export function ReleasesPage({ request, csrf }) {
     try {
       const value = await request('unified/releases')
       setState(value)
-      setOperation((current) => current || value.operation)
+      setOperation(value.operation)
     } catch (err) {
       setError(err.message)
     }
@@ -516,16 +517,35 @@ export function ReleasesPage({ request, csrf }) {
     void load()
   }, [])
   useEffect(() => {
-    if (!ticket || !['queued', 'running'].includes(operation?.status)) return undefined
-    let live = true
+    if (!operation?.id || !['queued', 'running'].includes(operation.status)) return undefined
+    let live = true, polling = false
+    const recover = async () => {
+      const snapshot = await request('unified/releases')
+      if (live) {
+        setState(snapshot)
+        setOperation(snapshot.operation)
+        setTicket(null)
+        setBusy(['queued', 'running'].includes(snapshot.operation?.status))
+      }
+    }
     const timer = window.setInterval(async () => {
+      if (polling) return
+      polling = true
       try {
-        const response = await fetch(`/admin/api/unified/releases/operations/${ticket.id}`, {
-          headers: { 'X-Release-Ticket': ticket.ticket },
-          credentials: 'same-origin',
-        })
-        if (!response.ok) return
-        const value = await response.json()
+        let value
+        if (ticket?.id === operation.id) {
+          const response = await fetch(`/admin/api/unified/releases/operations/${ticket.id}`, {
+            headers: { 'X-Release-Ticket': ticket.ticket }, credentials: 'same-origin',
+          })
+          if ([403, 404].includes(response.status)) {
+            await recover()
+            return
+          }
+          if (!response.ok) return
+          value = await response.json()
+        } else {
+          value = await request(`unified/releases/operations/${operation.id}`)
+        }
         if (live) {
           setOperation(value)
           if (!['queued', 'running'].includes(value.status)) {
@@ -533,15 +553,20 @@ export function ReleasesPage({ request, csrf }) {
             void load()
           }
         }
-      } catch {
+      } catch (err) {
+        if (err.status === 404) {
+          try { await recover() } catch { /* Retry after reconnection. */ }
+        }
         /* The gateway is temporarily unavailable while it is replaced. */
+      } finally {
+        polling = false
       }
     }, 2000)
     return () => {
       live = false
       window.clearInterval(timer)
     }
-  }, [ticket, operation?.status])
+  }, [ticket, operation?.id, operation?.status, request])
   async function check() {
     setBusy(true)
     setError('')
@@ -646,6 +671,12 @@ export function ReleasesPage({ request, csrf }) {
             <span>{operation.progress || 0}%</span>
           </div>
           <progress value={operation.progress || 0} max="100" />
+          {operation.phase === 'download' && operation.downloaded_bytes != null && (
+            <p>已下载 {(operation.downloaded_bytes / 1024 / 1024).toFixed(1)} MB
+              {operation.total_bytes > 0 ? ` / ${(operation.total_bytes / 1024 / 1024).toFixed(1)} MB` : ''}
+              {operation.download_attempt > 1 ? ` · 第 ${operation.download_attempt} 次尝试` : ''}
+            </p>
+          )}
           {operation.status === 'succeeded' && (
             <p>
               <Check size={15} />
@@ -654,7 +685,9 @@ export function ReleasesPage({ request, csrf }) {
           )}
           {operation.status === 'failed' && (
             <p>
-              {operation.rolled_back ? '新版本未通过检查，原版本已恢复。' : '操作未完成，请检查 Docker 与仓库连接。'}{' '}
+              {operation.error_code === 'source_download_timeout' ? 'GitHub 源码下载超时，原服务仍在运行，请稍后重试。' :
+                operation.error_code === 'source_download_failed' ? 'GitHub 源码下载失败，原服务仍在运行，请检查服务器网络后重试。' :
+                operation.rolled_back ? '新版本未通过检查，原版本已恢复。' : '操作未完成，请检查 Docker 与仓库连接。'}{' '}
               {operation.error_code}
             </p>
           )}

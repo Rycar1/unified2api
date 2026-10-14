@@ -5,12 +5,14 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import httpx
 from fastapi import HTTPException
 
 from unified.docker_engine import replacement_config
 from unified.release_worker import ReleaseWorker, source_context
 from unified.releases import ReleaseManager
+from unified.release_download import SourceDownloadError
 
 OLD = '1'*40
 NEW = '2'*40
@@ -134,6 +136,30 @@ class Releases(unittest.TestCase):
         self.assertEqual(value['status'],'failed')
         self.assertEqual(value['failed_phase'],'build')
         self.assertEqual(value['error_code'],'worker_exited')
+
+    def test_download_timeout_reports_safe_reason_and_leaves_serving_container_running(self):
+        def stalled_build():
+            self.worker.state('download',15)
+            raise SourceDownloadError('source_download_timeout')
+        with patch.object(self.worker,'build',side_effect=stalled_build),patch('builtins.print'):
+            self.worker.run()
+        job=json.loads((self.root/'operation.json').read_text())
+        self.assertEqual(job['status'],'failed')
+        self.assertEqual(job['failed_phase'],'download')
+        self.assertEqual(job['error_code'],'source_download_timeout')
+        self.assertEqual(self.engine.parent['State']['Status'],'running')
+
+    def test_download_progress_is_public_but_internal_job_fields_are_hidden(self):
+        self.job.update(status='running',phase='download',progress=23,downloaded_bytes=12,total_bytes=20,
+                        download_attempt=2,ticket_hash='private-ticket-hash',worker_id='private-worker')
+        (self.root/'operation.json').write_text(json.dumps(self.job))
+        self.engine.containers['private-worker']={'State':{'Status':'running'}}
+        manager=ReleaseManager(self.root,engine=self.engine,repository='synthetic/project',container='old-id')
+        value=manager.progress(self.job['id'])
+        self.assertEqual(value['downloaded_bytes'],12)
+        self.assertEqual(value['total_bytes'],20)
+        self.assertEqual(value['download_attempt'],2)
+        self.assertNotIn('private',json.dumps(value))
 
     def archive(self,names):
         blob = io.BytesIO()

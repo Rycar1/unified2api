@@ -16,7 +16,8 @@ from .docker_engine import DockerEngine, EngineError, image_reference
 
 REVISION = re.compile(r'^[0-9a-f]{40}$')
 REPOSITORY = re.compile(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
-PUBLIC_JOB_FIELDS = {'id','action','revision','status','phase','failed_phase','progress','started','finished','rolled_back','error_code'}
+PUBLIC_JOB_FIELDS = {'id','action','revision','status','phase','failed_phase','progress','started','finished','rolled_back','error_code',
+                     'downloaded_bytes','total_bytes','download_attempt','updated'}
 
 
 class ReleaseManager:

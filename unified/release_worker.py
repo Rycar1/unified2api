@@ -1,5 +1,6 @@
 """Temporary Python worker which survives replacement of the gateway container."""
 import io
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import httpx
 from admin.server import write_json
 from .docker_engine import DockerEngine, replacement_config, image_reference
 from .releases import REPOSITORY, REVISION
+from .release_download import SourceDownloadError, download_source
 
 
 def source_context(blob,revision):
@@ -77,21 +79,25 @@ class ReleaseWorker:
         revision = self.job['revision']
         if not REVISION.fullmatch(revision or ''):
             raise ValueError('invalid revision')
-        with httpx.Client(timeout=120,follow_redirects=False,trust_env=False) as client:
+        with httpx.Client(timeout=30,follow_redirects=False,trust_env=False) as client:
             meta = client.get('https://api.github.com/repos/'+self.job['repository']+'/commits/'+revision,
                               headers={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'})
             meta.raise_for_status()
             if meta.json().get('sha')!=revision:
                 raise ValueError('source revision mismatch')
-            self.state('download',15)
-            blob = bytearray()
-            with client.stream('GET','https://codeload.github.com/'+self.job['repository']+'/tar.gz/'+revision) as response:
-                response.raise_for_status()
-                for part in response.iter_bytes():
-                    blob.extend(part)
-                    if len(blob)>150*1024*1024:
-                        raise ValueError('source download limit')
-        context = source_context(bytes(blob),revision)
+        last_update = 0
+        def progress(received,total,attempt):
+            nonlocal last_update
+            now = time.monotonic()
+            if received and received != total and now-last_update < 1:
+                return
+            last_update = now
+            percent = 15 + min(14,int(14*received/total)) if total else 15
+            self.state('download',percent,downloaded_bytes=received,total_bytes=total,
+                       download_attempt=attempt,updated=int(self.clock()))
+        blob = asyncio.run(download_source(self.job['repository'],revision,progress))
+        self.state('validate',29)
+        context = source_context(blob,revision)
         self.state('build',30)
         with tempfile.TemporaryDirectory(prefix='unified-build-') as folder:
             archive = Path(folder)/'context.tar.gz'
@@ -187,9 +193,10 @@ class ReleaseWorker:
                 if parent['Config'].get('Labels',{}).get('io.unified2api.role')!='gateway':
                     raise ValueError('invalid parent')
                 self.replace(parent,image)
-        except Exception:
+        except Exception as exc:
             if self.job.get('status')!='failed':
-                self.state('failed',100,status='failed',failed_phase=self.job.get('phase'),finished=int(self.clock()),error_code='release_failed')
+                code = exc.code if isinstance(exc,SourceDownloadError) else 'release_failed'
+                self.state('failed',100,status='failed',failed_phase=self.job.get('phase'),finished=int(self.clock()),error_code=code)
             # No raw build output, exception body, deployment environment or secrets.
             print(json.dumps({'id':self.job_id,'status':'failed','phase':self.job['phase']}),flush=True)
 
