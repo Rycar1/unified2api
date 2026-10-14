@@ -1,5 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Download, RefreshCw, Upload, Gift, WalletCards, ShieldCheck } from 'lucide-react'
+import { CreditGrants, ExecutionRecords } from './benefit-records'
+import { BenefitTasks } from './benefit-tasks'
+import { QuotaDetails } from './quota-details'
 
 const platform = (a) =>
   a.provider === 'qoder'
@@ -9,96 +12,9 @@ const platform = (a) =>
       ] || a.provider
 const number = (n, suffix = '') =>
   n == null ? '—' : Number(n).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + suffix
-const labels = {
-  remaining: '余额',
-  remain: '余额',
-  total: '总额度',
-  used: '已用额度',
-  amount: '额度',
-  credit: '积分',
-  credits: '积分',
-  earned_credit: '已领取积分',
-  name: '名称',
-  title: '名称',
-  description: '说明',
-  status: '状态',
-  state: '状态',
-  plan: '套餐',
-  expireTime: '到期时间',
-  expires_at: '到期时间',
-  created_at: '发放时间',
-  reason: '来源',
-  type: '类型',
-  count: '数量',
-  level: '等级',
-  energy: '能量',
-  experience: '经验',
-  message: '说明',
-  msg: '说明',
-  currency: '币种',
-  id: '编号',
-  uid: '账号编号',
-  provider: '平台',
-  account_id: '账号编号',
-  startTime: '开始时间',
-  endTime: '结束时间',
-}
-const hidden =
-  /token|secret|password|authorization|cookie|headers|request|response|session|credential|key|^(provider|account_id|uid|realm|jump_url|task_code|domain|id)$/i
-function Fields({ value, depth = 0 }) {
-  if (value == null) return <span className="muted">未提供</span>
-  if (depth > 5) return null
-  if (Array.isArray(value))
-    return value.length ? (
-      <div className="task-list">
-        {value.slice(0, 100).map((row, i) => (
-          <div className="quota-entry" key={row.id || i}>
-            <Fields value={row} depth={depth + 1} />
-          </div>
-        ))}
-      </div>
-    ) : (
-      <p className="subtle-note">暂无记录</p>
-    )
-  if (typeof value !== 'object')
-    return <span>{typeof value === 'boolean' ? (value ? '是' : '否') : String(value)}</span>
-  const entries = Object.entries(value).filter(([key]) => !hidden.test(key))
-  const simple = entries.filter(([, v]) => v == null || typeof v !== 'object')
-  return (
-    <>
-      <dl className="details-pairs">
-        {simple.map(([key, v]) => (
-          <div key={key}>
-            <dt>{labels[key] || key}</dt>
-            <dd>
-              <Fields value={v} depth={depth + 1} />
-            </dd>
-          </div>
-        ))}
-      </dl>
-      {entries
-        .filter(([, v]) => v != null && typeof v === 'object')
-        .map(([key, v]) => (
-          <section key={key}>
-            <h3 className="detail-label">
-              {labels[key] ||
-                {
-                  packages: '额度套餐',
-                  grants: '额度发放',
-                  quota: '额度明细',
-                  summary: '任务进度',
-                  tasks: '任务列表',
-                  items: '明细',
-                  data: '明细',
-                }[key] ||
-                key}
-            </h3>
-            <Fields value={v} depth={depth + 1} />
-          </section>
-        ))}
-    </>
-  )
-}
+const payloadError = (value, fallback) => value?.ok === false
+  ? [value.error, value.message, value.msg].find((text) => typeof text === 'string' && text.trim()) || fallback
+  : ''
 function Notice({ error, message }) {
   return error ? (
     <div className="result-banner error" role="alert">
@@ -121,23 +37,26 @@ function Loading() {
 }
 function useRemote(request, path) {
   const [state, set] = useState({ loading: true, value: null, error: '' })
+  const generation = useRef(0)
   const load = async () => {
+    const current = ++generation.current
     set((s) => ({ ...s, loading: true, error: '' }))
     try {
       const value = await request(path)
-      set({ value, loading: false, error: '' })
+      if (current === generation.current) set({ value, loading: false, error: '' })
     } catch (e) {
-      set({ value: null, loading: false, error: e.message })
+      if (current === generation.current) set((s) => ({ ...s,
+        value: [401, 403].includes(e.status) ? null : s.value, loading: false, error: e.message }))
     }
   }
   useEffect(() => {
-    let live = true
+    const current = ++generation.current
     set({ loading: true, value: null, error: '' })
     request(path)
-      .then((value) => live && set({ value, loading: false, error: '' }))
-      .catch((e) => live && set({ value: null, loading: false, error: e.message }))
+      .then((value) => current === generation.current && set({ value, loading: false, error: '' }))
+      .catch((e) => current === generation.current && set({ value: null, loading: false, error: e.message }))
     return () => {
-      live = false
+      generation.current++
     }
   }, [path, request])
   return { ...state, load }
@@ -147,8 +66,8 @@ export function QuotaDialog({ account, request, Modal, onClose }) {
   const state = useRemote(request, `unified/accounts/${account.provider}/${encodeURIComponent(account.id)}/details`)
   return (
     <Modal title="额度明细" subtitle={`${platform(account)} · ${account.name || account.uid}`} onClose={onClose}>
-      <Notice error={state.error} />
-      {state.loading ? <Loading /> : state.value && <Fields value={state.value} />}
+      <Notice error={state.error || payloadError(state.value, '额度查询失败')} />
+      {state.loading && !state.value ? <Loading /> : state.value && <QuotaDetails value={state.value} />}
       <button className="button secondary" disabled={state.loading} onClick={state.load}>
         <RefreshCw size={15} />
         重新查询
@@ -238,6 +157,7 @@ export function TasksPage({ data, request, csrf, onRefresh }) {
             {accounts.map((a) => (
               <button
                 className={account && accountKey(a) === accountKey(account) ? 'active' : ''}
+                aria-pressed={!!account && accountKey(a) === accountKey(account)}
                 onClick={() => setSelected(accountKey(a))}
                 key={`${a.provider}-${a.id}`}
               >
@@ -248,17 +168,18 @@ export function TasksPage({ data, request, csrf, onRefresh }) {
             {!accounts.length && <p className="subtle-note">先添加 CodeBuddy、WorkBuddy 或 Qoder 账号</p>}
           </section>
         )}
-        <section className="content-card">
+        <section className="content-card" aria-busy={state.loading}>
           <div className="section-head">
             <div>
               <span className="section-label">{tab === 'tasks' ? platform(account || {}) : '记录'}</span>
               <h2>{tab === 'tasks' ? '账号福利' : tab === 'history' ? '执行记录' : '额度发放明细'}</h2>
+              {tab !== 'tasks' && <p className="record-scope">{tab === 'history' ? '各平台已保存的执行记录' : 'WorkBuddy 账号的额度包'}</p>}
             </div>
             <button className="icon-action" aria-label="刷新福利记录" onClick={state.load} disabled={state.loading}>
-              <RefreshCw size={16} />
+              <RefreshCw size={16} className={state.loading ? 'spin' : ''} />
             </button>
           </div>
-          <Notice error={error || state.error} message={message} />
+          <Notice error={error || state.error || payloadError(state.value, '福利数据查询失败')} message={message} />
           {tab === 'tasks' && account && (
             <div className="head-actions task-actions">
               {actions.map(([action, name]) => (
@@ -274,7 +195,9 @@ export function TasksPage({ data, request, csrf, onRefresh }) {
               ))}
             </div>
           )}
-          {state.loading ? <Loading /> : state.value && <Fields value={state.value} />}
+          {state.loading && !state.value ? <Loading /> : state.value && (tab === 'history'
+            ? <ExecutionRecords value={state.value} accounts={accounts} />
+            : tab === 'grants' ? <CreditGrants value={state.value} /> : <BenefitTasks value={state.value} provider={account?.provider} />)}
         </section>
       </div>
     </>

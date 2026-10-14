@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import {
   Activity,
-  Blocks,
   Bot,
   Check,
   ChevronDown,
@@ -50,6 +49,7 @@ import { TasksPage, QuotaDialog, ProviderSettings, PerformancePage, BulkImportDi
 import './refresh.css'
 import { useTheme, ThemeToggle } from './theme'
 import './theme.css'
+import { Dashboard } from './dashboard'
 
 const pageMeta = {
   tasks: ['福利任务', '领取账号福利，查看任务进度和额度发放'],
@@ -727,75 +727,6 @@ function KeyDialog({ csrf, onClose, onSaved }) {
         </form>
       )}
     </Modal>
-  )
-}
-
-function Overview({ data, onNavigate }) {
-  const metrics = data?.metrics || {}
-  const summary = [
-    ['已连接账号', data?.accounts?.length || 0, Users],
-    ['可用模型', data?.models?.length || 0, Blocks],
-    ['自定义服务', data?.connections?.length || 0, Server],
-    ['累计请求', metrics.completed || 0, Activity],
-  ]
-  return (
-    <div className="stack">
-      <section className="summary-grid">
-        {summary.map(([label, value, Icon]) => (
-          <article className="summary-card" key={label}>
-            <span className="summary-icon">
-              <Icon size={16} />
-            </span>
-            <div>
-              <strong>{value}</strong>
-              <span>{label}</span>
-            </div>
-          </article>
-        ))}
-      </section>
-      <section className="content-card endpoint-card">
-        <div>
-          <span className="section-label">统一接口</span>
-          <h2>一个地址调用全部模型</h2>
-          <p className="muted">客户端只需配置 API 地址和模型前缀。</p>
-        </div>
-        <code>{location.origin}/v1</code>
-      </section>
-      <section className="content-card">
-        <div className="section-head">
-          <div>
-            <span className="section-label">快速开始</span>
-            <h2>配置进度</h2>
-          </div>
-        </div>
-        <div className="setup-list">
-          <button onClick={() => onNavigate('accounts')}>
-            <span>01</span>
-            <div>
-              <strong>连接平台账号</strong>
-              <small>TRAE、CodeBuddy 或 MonkeyCode</small>
-            </div>
-            <ChevronDown size={16} />
-          </button>
-          <button onClick={() => onNavigate('keys')}>
-            <span>02</span>
-            <div>
-              <strong>创建 API 密钥</strong>
-              <small>供本地客户端访问统一网关</small>
-            </div>
-            <ChevronDown size={16} />
-          </button>
-          <button onClick={() => onNavigate('test')}>
-            <span>03</span>
-            <div>
-              <strong>发送测试请求</strong>
-              <small>确认模型路由和回复正常</small>
-            </div>
-            <ChevronDown size={16} />
-          </button>
-        </div>
-      </section>
-    </div>
   )
 }
 
@@ -2926,7 +2857,7 @@ function App() {
     )
   const [title, description] = pageMeta[page]
   const pages = {
-    overview: <Overview data={data} onNavigate={navigate} />,
+    overview: <Dashboard data={data} onNavigate={navigate} request={request} />,
     accounts: (
       <Accounts
         data={data}
@@ -3023,7 +2954,7 @@ function App() {
             <div className="nav-group" key={group.label}>
               <span>{group.label}</span>
               {group.items.map(([id, Icon]) => (
-                <button key={id} className={page === id ? 'active' : ''} onClick={() => navigate(id)}>
+                <button key={id} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => navigate(id)}>
                   <Icon size={17} />
                   {pageMeta[id][0]}
                 </button>
@@ -3032,7 +2963,7 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <button className={page === 'settings' ? 'active' : ''} onClick={() => navigate('settings')}>
+          <button className={page === 'settings' ? 'active' : ''} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}>
             <Settings2 size={17} />
             设置
           </button>
