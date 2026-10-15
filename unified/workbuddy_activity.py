@@ -103,8 +103,8 @@ class WebActivity:
                     states[account.uid]={'day':day,'ok':True,'at':int(time.time()),'chunks':result['chunks']}
                     self.config.set('web_activity',states)
                 account.last_daily_chat=time.strftime('%Y-%m-%d %H:%M:%S')
-                if hasattr(account,'save'):
-                    try: account.save()
+                if hasattr(account,'save') and getattr(account,'path',None):
+                    try: account.save(str(Path(account.path).parent))
                     except OSError: result['account_state_stale']=True
                 try:
                     account.fetch_credits()
