@@ -117,6 +117,7 @@ class ConfigHistory:
         diff=changes(value['before'],value['after']) if row['state']=='completed' else []
         return {**row,'changes':diff[:100],'change_count':len(diff),'fingerprint':self.fingerprint(current),
                 'restore_changes':changes(current,value['before'])[:100],
+                'restore_after_changes':changes(current,value['after'])[:100] if row['state']=='completed' else [],
                 'can_restore_before':True,'can_restore_after':row['state']=='completed'}
 
     def query(self,limit=30,offset=0,kind=''):

@@ -129,11 +129,14 @@ class ProbePlans:
             settings=self.settings()
             if not self._claim(settings,force): return self.status()
             try:
-                for model in settings['models']:
-                    for check in settings['checks']:
+                with closing(self.connect()) as db:
+                    latest={(m,c):t for m,c,t in db.execute('SELECT model,check_name,MAX(started) FROM probe_runs GROUP BY model,check_name')}
+                scenarios=[(m,c) for m in settings['models'] for c in settings['checks']]
+                scenarios.sort(key=lambda pair:latest.get(pair,0))
+                for model,check in scenarios:
                         path,body,marker=self.payload(model,check,settings)
                         rid=self._reserve(model,check,body,settings)
-                        if rid is None: return self.status()
+                        if rid is None: break
                         started=time.monotonic()
                         with closing(self.connect()) as db:
                             previous=db.execute('SELECT ok FROM probe_runs WHERE model=? AND check_name=? AND id<? ORDER BY id DESC LIMIT 1',(model,check,rid)).fetchone()

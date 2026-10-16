@@ -37,6 +37,10 @@ class ProbePlansTest(unittest.IsolatedAsyncioTestCase):
         await restarted.run()
         self.assertEqual(len(self.calls),1)
         self.assertNotIn('unified-probe-',json.dumps(restarted.status()))
+        self.now+=86400
+        await restarted.run()
+        self.assertIn('tools',self.calls[-1][1])
+        self.assertFalse(restarted.status()['running'])
 
     async def test_schedules_are_opt_in_and_deduplicate_one_interval(self):
         await self.probes.tick()
