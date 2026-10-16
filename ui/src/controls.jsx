@@ -215,6 +215,7 @@ export function RequestDetailsDialog({ requestId, request, Modal, onClose }) {
       {!data && !error && <p className="muted">正在读取诊断信息…</p>}
       {data && (
         <>
+          {data.diagnosis && <div className="diagnosis-callout"><strong>{data.diagnosis.label}{data.diagnosis.upstream_code ? ` · ${data.diagnosis.upstream_code}` : ''}</strong><p>{data.diagnosis.suggestion}</p></div>}
           <dl className="diagnostic-summary">
             <div>
               <dt>请求结果</dt>
@@ -256,6 +257,7 @@ export function RequestDetailsDialog({ requestId, request, Modal, onClose }) {
                   账号：{attempt.account_name || attempt.account_id || '上游未提供标识'}
                   {attempt.account_name && attempt.account_id ? ` · ${attempt.account_id}` : ''}
                 </small>
+                {attempt.diagnosis && <small>{attempt.diagnosis.label}{attempt.diagnosis.upstream_code ? ` · ${attempt.diagnosis.upstream_code}` : ''} · {attempt.diagnosis.suggestion}</small>}
                 <small>
                   HTTP {attempt.status ?? '—'} · 首响应 {attempt.ttft_ms == null ? '—' : `${attempt.ttft_ms} ms`} ·
                   总耗时 {attempt.duration_ms ?? '—'} ms

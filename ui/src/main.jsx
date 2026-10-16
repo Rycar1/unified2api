@@ -53,6 +53,10 @@ import { Dashboard } from './dashboard'
 import { uniqueModels } from './model-list'
 import { NetworkPanel, RoutePlanDialog, ConnectionPoolDialog } from './operations'
 import { AutomationCenter } from './automation-plans'
+import { ModelAliasesPanel } from './reliability'
+import { ProbePlansPage } from './probe-plans'
+import { ConfigHistoryPage } from './config-history'
+import { CreditPolicyPanel } from './credit-policy'
 
 const pageMeta = {
   tasks: ['福利任务', '领取账号福利，查看任务进度和额度发放'],
@@ -70,6 +74,8 @@ const pageMeta = {
   backup: ['备份恢复', '导出或恢复加密的完整服务数据'],
   usage: ['用量统计', '查看每日、每周和累计 Token 消耗'],
   releases: ['版本管理', '检查更新、升级和回滚'],
+  probes: ['兼容性巡检', '独立测试模型接口、工具调用与流式结束'],
+  history: ['配置历史', '查看修改差异，恢复单项配置'],
   settings: ['设置', '调整外观、统计保留时间和自动刷新'],
 }
 
@@ -105,6 +111,8 @@ const navGroups = [
     items: [
       ['logs', FileText],
       ['automation', Clock],
+      ['probes', FlaskConical],
+      ['history', FileText],
       ['backup', Archive],
       ['releases', Download],
     ],
@@ -125,6 +133,7 @@ const providerName = (id) =>
     qoder_cn: 'Qoder 国内',
     workbuddy: 'WorkBuddy AI 国外',
     route: '智能路由',
+    alias: '模型别名',
   })[id] || id
 const accountFilter = (a) => (a.provider === 'qoder' ? (a.region === 'cn' ? 'qoder_cn' : 'qoder_global') : a.provider)
 const accountPlatform = (a) =>
@@ -160,7 +169,10 @@ async function request(path, { method = 'GET', body, csrf = '' } = {}) {
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    const error = new Error(data.detail || data.error?.message || '请求失败，请稍后重试')
+    const detail = data.error || data.detail
+    const message = typeof detail === 'string' ? detail : detail?.message || '请求失败，请稍后重试'
+    const suggestions = detail?.suggestions?.length ? `；建议模型：${detail.suggestions.join('、')}` : ''
+    const error = new Error(message + suggestions)
     error.status = response.status
     throw error
   }
@@ -1221,6 +1233,7 @@ function Models({ data, onNavigate, csrf, onRefresh }) {
           />
         </label>
       </div>
+      <ModelAliasesPanel data={data} request={request} csrf={csrf} onRefresh={onRefresh} />
       <div className="filter-tabs model-filters" role="group" aria-label="模型前缀分类">
         {[{ id: '', label: '全部', count: models.length }, ...groups].map((group) => (
           <button
@@ -1240,6 +1253,7 @@ function Models({ data, onNavigate, csrf, onRefresh }) {
           <tr key={model.id}>
             <td>
               <code>{model.id}</code>
+              {model.alias_target && <small className="muted">实际目标：{model.alias_target}</small>}
               {model.catalog_source === 'snapshot' && <small className="muted">官方目录快照</small>}
               {model.available === false && (
                 <small className="danger-text">{model.disabled_reason || '当前不可用'}</small>
@@ -1492,7 +1506,7 @@ function Keys({ data, csrf, onRefresh, onAdd }) {
 }
 
 function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
-  const models = (data?.models || []).filter((model) => !model.id.startsWith('route/'))
+  const models = (data?.models || []).filter((model) => !model.id.startsWith('route/') && !model.alias_target)
   const [modelQuery, setModelQuery] = useState('')
   const visibleModels = models.filter((model) =>
     `${model.id} ${model.name || ''}`.toLowerCase().includes(modelQuery.trim().toLowerCase()),
@@ -1901,6 +1915,7 @@ function Logs({ csrf }) {
               <td>
                 <StatusBadge status={item.ok ? 'ready' : 'error'} />
                 <small>{item.status || item.outcome}</small>
+                {item.diagnosis && <small className="muted">{item.diagnosis.label}{item.upstream_code ? ` · ${item.upstream_code}` : ''}</small>}
               </td>
               <td className="tabular">
                 {item.ttft_ms == null ? '—' : `${item.ttft_ms.toLocaleString()} ms`}
@@ -2710,6 +2725,7 @@ function App() {
   const pages = {
     overview: <Dashboard data={data} onNavigate={navigate} request={request} />,
     accounts: (
+      <div className="stack reliability-stack">
       <Accounts
         data={data}
         csrf={csrf}
@@ -2717,6 +2733,8 @@ function App() {
         onAdd={() => setDialog('account')}
         onImport={() => setDialog('import')}
       />
+      <CreditPolicyPanel data={data} request={request} csrf={csrf} />
+      </div>
     ),
     tasks: <TasksPage data={data} request={request} csrf={csrf} onRefresh={load} />,
     performance: <PerformancePage request={request} DataTable={DataTable} />,
@@ -2756,6 +2774,8 @@ function App() {
     ),
     logs: <Logs csrf={csrf} />,
     automation: <Automation data={data} csrf={csrf} onRefresh={load} />,
+    probes: <ProbePlansPage data={data} request={request} csrf={csrf} DataTable={DataTable} />,
+    history: <ConfigHistoryPage request={request} csrf={csrf} DataTable={DataTable} Modal={Modal} onRefresh={load} />,
     backup: <Backup csrf={csrf} />,
     usage: <Usage settings={consoleSettings} refreshNonce={refreshNonce} />,
     releases: <ReleasesPage request={request} csrf={csrf} />,
