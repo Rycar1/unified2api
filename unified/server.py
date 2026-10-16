@@ -198,7 +198,7 @@ class API:
         try:
             self.buddy.state.store.check_api(req.headers.get("authorization"), req.headers.get("x-api-key"))
             probe_token = req.headers.get('authorization', '').removeprefix('Bearer ').strip() or req.headers.get('x-api-key', '')
-            if digest(probe_token) in getattr(self.buddy.state.store, 'test_keys', ()):
+            if digest(probe_token) in getattr(self.buddy.state.store, 'test_keys', ()) and not scope.get('state',{}).get('scheduled_probe'):
                 scope.setdefault('state', {})['connection_probe'] = True
             if path == "/v1/models" and req.method == "GET":
                 catalog = await self.models()
@@ -319,13 +319,16 @@ def create_app(native=None, buddy=None, qoder_transport=None):
                 await stack.enter_async_context(embedded_workbuddy)
             await stack.enter_async_context(buddy.router.lifespan_context(buddy))
             automation_task = asyncio.create_task(automation.loop())
+            probe_task = asyncio.create_task(probes.loop())
             qoder_refresh_task = asyncio.create_task(qoder_accounts.maintain())
             try:
                 yield
             finally:
                 automation_task.cancel()
+                probe_task.cancel()
+                if probes.task: probes.task.cancel()
                 qoder_refresh_task.cancel()
-                await asyncio.gather(automation_task, qoder_refresh_task, return_exceptions=True)
+                await asyncio.gather(automation_task, probe_task, qoder_refresh_task, *([probes.task] if probes.task else []), return_exceptions=True)
                 await qoder_accounts.close()
                 native.close()
 
@@ -339,6 +342,11 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     api.aliases = ModelAliases(unified_config)
     from .reliability_api import register_aliases
     register_aliases(app,body_json,store,api)
+    from .probe_plans import ProbePlans,ProbeRunner
+    probes=ProbePlans(unified_config,store.root/'probes.sqlite',ProbeRunner(api,store))
+    from .reliability_api import register_probes
+    register_probes(app,body_json,store,api,probes)
+    app.state.probes=probes
     api.network = network
     connections.network = network
     register_controls(app,body_json,store,api,request_log,controls,capabilities,releases)
