@@ -221,6 +221,15 @@ class QoderAccounts(QoderRelay):
                 for account in list(self.pool.accounts) if account.enabled
                 for row in self.model_rows(account) if row.get("key") and row.get("enable") is not False}
 
+    def known_model_ids(self):
+        ids=set()
+        for account in list(self.pool.accounts):
+            prefix='qoder-cn/' if account.realm=='cn' else 'qoder/'
+            ids.update(prefix+name for name in ('auto','ultimate','performance','efficient'))
+            aliases=model_aliases(self.model_rows(account))
+            ids.update(prefix+name for pair in aliases.items() for name in pair)
+        return ids
+
     async def models(self):
         result = {}
         for account in list(self.pool.accounts):

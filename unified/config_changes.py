@@ -61,7 +61,7 @@ class ConfigChanges:
                 if current is not None: manager.delete(entity)
             else:
                 catalog=(await self.api.models())['data']
-                models={m['id'] for m in catalog if not m['id'].startswith('route/')} if kind=='route' else catalog
+                models={m['id'] for m in catalog if not m['id'].startswith('route/') and not m.get('alias_target')} if kind=='route' else catalog
                 manager.save(target,models,entity if current is not None else None)
         elif kind=='connection':
             connection=self.api.connections

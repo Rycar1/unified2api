@@ -76,17 +76,28 @@ class API:
         self.qoder = qoder
         self.controls, self.capabilities = controls, capabilities
         self.catalog = []
+        self.catalog_by_prefix = {}
         self.aliases = None
 
-    def validation_catalog(self):
-        rows=list(self.catalog)
-        rows += [{'id':'codebuddy/'+m} for m in converter.get_available_models()]
-        if self.connections: rows += self.connections.models()
-        if self.routes: rows += self.routes.public_models()
-        runtime=getattr(self.workbuddy,'runtime',None)
-        if runtime and runtime.proxy:
-            rows += [{'id':'workbuddy/'+m} for m in runtime.proxy.INTL_UI_ORDER]
+    def validation_catalog(self,requested):
+        alias=next((r for r in self.aliases.rows() if r['id']==requested),None) if self.aliases else None
+        rows=self.validation_prefix(requested.partition('/')[0])
+        if alias: rows+=self.validation_prefix(alias['target'].partition('/')[0])
         return list({r['id']:r for r in rows}.values())
+
+    def validation_prefix(self,prefix):
+        rows=list(self.catalog_by_prefix.get(prefix,[]))
+        if prefix=='codebuddy': rows += [{'id':'codebuddy/'+m} for m in converter.get_available_models()]
+        if self.connections and prefix in self.connections.data:
+            row=self.connections.get(prefix)
+            rows=[{'id':prefix+'/'+m} for m in row['models']] if row['enabled'] else []
+        if prefix=='route' and self.routes: rows=self.routes.public_models()
+        if prefix in {'qoder','qoder-cn'} and self.qoder:
+            rows = [{'id':m} for m in self.qoder.known_model_ids() if m.startswith(prefix+'/')]
+        runtime=getattr(self.workbuddy,'runtime',None)
+        if prefix=='workbuddy' and runtime and runtime.proxy:
+            rows += [{'id':'workbuddy/'+m} for m in runtime.proxy.INTL_UI_ORDER]
+        return rows
 
     async def models(self):
         code, result = await self.native.request("GET", "/v1/models")
@@ -140,6 +151,8 @@ class API:
                 if model['id'].startswith('route/'):
                     model['limits_source']='route-targets'
         self.catalog=models
+        self.catalog_by_prefix={}
+        for row in models: self.catalog_by_prefix.setdefault(row['id'].partition('/')[0],[]).append(row)
         if self.aliases: models=models+self.aliases.models(models)
         return {"object": "list", "data": models, "unavailable_providers": unavailable}
 
@@ -228,7 +241,7 @@ class API:
                 raise HTTPException(400, "请指定带平台前缀的模型")
             requested=data['model']
             if self.aliases:
-                resolved=self.aliases.resolve(requested,self.validation_catalog())
+                resolved=self.aliases.resolve(requested,self.validation_catalog(requested))
                 if resolved!=requested:
                     from .diagnostics import CURRENT_TRACE
                     trace=CURRENT_TRACE.get()
@@ -257,6 +270,10 @@ class API:
                 return await JSONResponse({'input_tokens':input_tokens(data),'estimated':True,
                     'tokenizer':'gateway-estimate'})(scope,receive,send)
             if provider == "route":
+                chain=scope.get('unified_route_chain',())
+                if model in chain or len(chain)>=8:
+                    raise HTTPException(400,{'code':'route_cycle','message':'模型别名与路由形成循环引用，请调整路由目标'})
+                scope={**scope,'unified_route_chain':(*chain,model)}
                 return await self.route_request(model, scope, receive, send, data)
             if provider in {"trae", "monkeycode"} and path != "/v1/chat/completions":
                 raise HTTPException(400, "此平台当前仅支持 Chat Completions")
@@ -726,8 +743,9 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         return await connections.balance(cid, aid)
 
     async def routable_models():
-        models = {item["id"] for item in (await api.models())["data"] if not item["id"].startswith("route/")}
+        models = {item["id"] for item in (await api.models())["data"] if not item["id"].startswith("route/") and not item.get('alias_target')}
         models.update(qoder_accounts.legacy_model_ids())
+        models.difference_update(row['id'] for row in api.aliases.rows())
         return models
 
     @app.get("/admin/api/unified/routes")

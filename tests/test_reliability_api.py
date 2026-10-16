@@ -90,3 +90,17 @@ class ReliabilityAPI(unittest.IsolatedAsyncioTestCase):
         result=await self.client.patch(self.root+'/credit-policy',headers=self.csrf,json={'window_days':3})
         self.assertEqual(result.json()['settings']['window_days'],3)
         self.assertEqual((await self.client.get(self.root+'/credit-policy/expiring')).json()['items'],[])
+
+    async def test_alias_to_route_cannot_become_a_recursive_route_target(self):
+        route={'id':'stable','targets':['workbuddy/glm-5.3-flash']}
+        self.assertEqual((await self.client.post(self.root+'/routes',headers=self.csrf,json=route)).status_code,200)
+        self.assertEqual((await self.client.post(self.root+'/model-aliases',headers=self.csrf,json={'id':'alias/stable','target':'route/stable'})).status_code,200)
+        denied=await self.client.patch(self.root+'/routes/stable',headers=self.csrf,json={'targets':['alias/stable']})
+        self.assertEqual(denied.status_code,400)
+        result=await self.client.post('/v1/chat/completions',headers=self.auth,json={'model':'alias/stable','messages':[]})
+        self.assertEqual(result.status_code,200,result.text)
+        config=self.app.state.api.routes.config
+        rows=config.get('routes',[]);rows[0]['targets']=['alias/stable'];config.set('routes',rows)
+        cycle=await self.client.post('/v1/chat/completions',headers=self.auth,json={'model':'alias/stable','messages':[]})
+        self.assertEqual(cycle.status_code,400)
+        self.assertEqual(cycle.json()['error']['code'],'route_cycle')

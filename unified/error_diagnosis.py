@@ -3,11 +3,15 @@ import json
 import re
 
 CODES = {'11102':'model_not_found','11128':'channel_verification','11133':'parameters','6004':'quota_exhausted'}
-TEXT_CODES = {'model_not_found':'model_not_found','model_alias_disabled':'model_not_found',
+TEXT_CODES = {'model_not_found':'model_not_found','model_alias_disabled':'alias_disabled','model_alias_conflict':'alias_conflict',
+              'route_cycle':'route_configuration',
               'context_length_exceeded':'context_length','invalid_request_error':'parameters',
               'insufficient_quota':'quota_exhausted','rate_limit_exceeded':'rate_limited',
               'first_token_timeout':'first_token_timeout','stream_idle_timeout':'stream_timeout'}
 MESSAGES = {
+    'route_configuration':('路由配置存在循环','路由目标应使用真实平台模型，检查别名是否重新指向同一路由。'),
+    'alias_disabled':('模型别名已暂停','在模型页启用此别名，或使用其实际目标模型 ID。'),
+    'alias_conflict':('模型别名与真实模型冲突','在模型页删除旧别名或改用其他别名 ID，避免同名请求指向不同模型。'),
     'model_not_found':('模型不存在或未接入','从模型目录复制实际模型 ID；显示名称与路由名称不等于平台模型 ID。'),
     'channel_verification':('上游渠道校验失败','检查账号登录状态与渠道适配版本；重新登录后用单账号合成测试定位。'),
     'parameters':('请求参数不兼容','核对模型支持的推理强度、工具格式和输出上限，使用最小请求逐项测试。'),

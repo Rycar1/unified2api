@@ -31,6 +31,9 @@ class Aliases(unittest.TestCase):
                      {'id':'a/x','target':'unknown/x'}):
             with self.assertRaises(HTTPException): self.aliases.save(body,self.catalog)
         self.aliases.save({'id':'a/x','target':'workbuddy/glm-5.3-flash'},self.catalog)
+        with self.assertRaises(HTTPException) as conflict:
+            self.aliases.resolve('a/x',self.catalog+[{'id':'a/x'}])
+        self.assertEqual(conflict.exception.status_code,409)
         with self.assertRaises(HTTPException): self.aliases.save({'id':'a/y','target':'a/x'},self.catalog)
         with self.assertRaises(HTTPException): self.aliases.resolve('a/x',[])
         self.aliases.save({'enabled':False},self.catalog,'a/x')

@@ -55,6 +55,8 @@ class ModelAliases:
         ids = {r['id'] for r in catalog if not r.get('alias_target')}
         row = next((r for r in self.rows() if r['id']==mid), None)
         if row:
+            if mid in ids:
+                raise HTTPException(409, {'code':'model_alias_conflict','message':'别名 ID 已与真实模型冲突，请删除旧别名后重新选择模型'})
             if not row['enabled']:
                 raise HTTPException(400, {'code':'model_alias_disabled','message':'此模型别名已暂停'})
             if row['target'] not in ids:
