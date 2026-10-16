@@ -1169,6 +1169,10 @@ class Account(object):
             "X-Session-ID": derive_id(self.uid, "session"),
         }
         headers.update(identity)
+        if self.realm == "intl" and self.product == wb_identity.PRODUCT_DESKTOP:
+            # These fields belong to billing/feedback, not international chat.
+            headers.pop("X-Machine-ID", None)
+            headers.pop("X-Session-ID", None)
         device_token = self._device_token()
         if device_token:
             headers["X-Device-Token"] = device_token
