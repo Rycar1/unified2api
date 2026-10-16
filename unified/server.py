@@ -863,8 +863,14 @@ def create_app(native=None, buddy=None, qoder_transport=None):
             raise HTTPException(404, "登录助手安装包尚未构建")
         return FileResponse(archive, filename="monkey-login-helper.zip", media_type="application/zip")
 
+    from .config_history import ConfigHistory
+    from .config_changes import ConfigChanges,ConfigHistoryMiddleware
+    changes=ConfigChanges(ConfigHistory(store.root),unified_config,api,automation,probes,credit_policy)
+    changes.register(app,body_json)
     app.mount("/", buddy)
-    result = TrafficMiddleware(RequestLogMiddleware(MetricsMiddleware(api, metrics=metrics), request_log),store,controls,request_log)
+    app.state.config_changes=changes
+    api_with_history=ConfigHistoryMiddleware(api,changes)
+    result = TrafficMiddleware(RequestLogMiddleware(MetricsMiddleware(api_with_history, metrics=metrics), request_log),store,controls,request_log)
     result.state = app.state
     result.state.buddy, result.state.native = buddy, native
     result.state.connections = connections

@@ -35,7 +35,7 @@ def classify_error(value, status=None):
                 if key in item: walk(item[key],depth+1)
         elif isinstance(item,str):
             text=item[:16384];parts.append(text.lower())
-            codes.extend(re.findall(r'["\\]*code["\\]*\s*:\s*["\\]*(11102|11128|11133|6004)\b',text))
+            codes.extend(re.findall(r'["\\]*code["\\]*\s*[:=]\s*["\\]*(11102|11128|11133|6004)\b',text))
     walk(value)
     for code in codes:
         if code in CODES: return {'error_category':CODES[code],'upstream_code':code}
