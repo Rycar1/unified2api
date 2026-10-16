@@ -45,3 +45,26 @@ class CreditPolicyTest(unittest.TestCase):
         pool.active['urgent']=2
         self.assertEqual(pool.select(smart=True,max_concurrency=2)[0],'regular')
 
+    def test_workbuddy_expiry_uses_fresh_package_deadline_and_preserves_unmanaged_accounts(self):
+        from unified.workbuddy_hooks import install_credit_expiry
+        class Account:
+            def soonest_expiring_days(self): return 999
+        install_credit_expiry(SimpleNamespace(wb_accounts=SimpleNamespace(Account=Account)))
+        account=Account()
+        self.assertEqual(account.soonest_expiring_days(),999)
+        account._unified_credit_policy=self.policy
+        account.credits={'fetched_at':self.now,'packages':[{'remain':10,'expire_time':self.now+2*86400}]}
+        self.assertEqual(account.soonest_expiring_days(),2)
+        account.credits['fetched_at']=self.now-90000
+        self.assertIsNone(account.soonest_expiring_days())
+
+    def test_changing_window_recalculates_cached_domestic_packages(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        summary=self.policy.summarize([{'remain':10,'expire_time':self.now+2*86400},{'remain':20,'expire_time':self.now+5*86400}],store_packages=True)
+        self.assertEqual(summary['expiring_credits'],30)
+        store=SimpleNamespace(lock=threading.RLock(),data={'accounts':{'a':{'name':'Synthetic','enabled':True}},'account_status':{'a':summary}})
+        self.policy.update({'window_days':3})
+        result=asyncio.run(self.policy.expiring(store,SimpleNamespace(accounts=AsyncMock(return_value=[]))))
+        self.assertEqual(result['items'][0]['expiring_credits'],10)
+

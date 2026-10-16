@@ -7,6 +7,20 @@ from copy import deepcopy
 _REQUEST=threading.local()
 
 
+def install_credit_expiry(proxy):
+    account_class=getattr(proxy.wb_accounts,'Account',None)
+    if account_class is None or getattr(account_class,'_unified_expiry_installed',False): return
+    original=account_class.soonest_expiring_days
+    def soonest(account):
+        policy=getattr(account,'_unified_credit_policy',None)
+        if policy is None: return original(account)
+        credits=account.credits or {}
+        summary=policy.summarize(credits.get('packages',[]),credits.get('fetched_at',credits.get('updated_at',0)))
+        return (summary['credit_expires_at']-policy.clock())/86400 if policy.priority(summary)[0]==0 else None
+    account_class.soonest_expiring_days=soonest
+    account_class._unified_expiry_installed=True
+
+
 def request_parameter_metadata(payload):
     effort=payload.get('reasoning_effort',payload.get('reasoningEffort'))
     return {'messages':len(payload.get('messages') or []),'tools':len(payload.get('tools') or []),
@@ -56,13 +70,16 @@ def install(proxy):
         return original_end(self)
     handler.end_headers=end
     pool_class=proxy.wb_accounts.AccountPool
+    install_credit_expiry(proxy)
     original_pick=pool_class.pick_for_session
     def pick(pool,*args,**kwargs):
         policy=getattr(pool,'credit_policy',None)
         if policy:
             settings=policy.settings()
             for item in list(pool.accounts):
-                if item.realm=='intl': item.expiring_window_days=settings['window_days'] if settings['enabled'] else 0
+                if item.realm=='intl':
+                    item.expiring_window_days=settings['window_days'] if settings['enabled'] else 0
+                    item._unified_credit_policy=policy
         forced=getattr(_REQUEST,'forced',None)
         if forced:
             account=pool.get(forced)

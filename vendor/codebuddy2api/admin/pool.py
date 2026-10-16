@@ -180,7 +180,7 @@ class AccountPool:
             packages.extend(current)
             if len(packages) >= total:
                 result=summarize_packages(packages)
-                if hasattr(self,'credit_policy'): result.update(self.credit_policy.summarize(packages))
+                if hasattr(self,'credit_policy'): result.update(self.credit_policy.summarize(packages,store_packages=True))
                 if include_details:
                     fields={'PackageName','PackageCode','PackageStartTime','PackageEndTime','CapacityRemain','CapacityRemainPrecise',
                             'CapacitySize','CapacitySizePrecise','CycleCapacityRemain','CycleCapacityRemainPrecise','CycleCapacitySize',
