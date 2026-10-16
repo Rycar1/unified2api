@@ -51,6 +51,8 @@ import { useTheme, ThemeToggle } from './theme'
 import './theme.css'
 import { Dashboard } from './dashboard'
 import { uniqueModels } from './model-list'
+import { NetworkPanel, RoutePlanDialog, ConnectionPoolDialog } from './operations'
+import { AutomationCenter } from './automation-plans'
 
 const pageMeta = {
   tasks: ['福利任务', '领取账号福利，查看任务进度和额度发放'],
@@ -622,7 +624,7 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
             <input
               required
               readOnly={Boolean(initialConnection)}
-              pattern="[a-z][a-z0-9_-]{0,39}"
+              pattern={'[a-z][a-z0-9_\\-]{0,39}'}
               value={form.id}
               onChange={(e) => update('id', e.target.value)}
               placeholder="myapi"
@@ -1121,6 +1123,7 @@ function ConnectionRowActions({ connection, csrf, onRefresh, onEdit, onFeedback 
 
 function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
   const [feedback, setFeedback] = useState(null)
+  const [pool, setPool] = useState(null)
   const rows = data?.connections || []
   return (
     <section className="content-card">
@@ -1158,6 +1161,7 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
             </td>
             <td className="tabular">{item.models?.length || 0}</td>
             <td className="row-menu">
+              <button className="button secondary pool-open" onClick={() => setPool(item)}>账号池 · {item.accounts?.length || 1}</button>
               <ConnectionRowActions
                 connection={item}
                 csrf={csrf}
@@ -1169,6 +1173,7 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
           </tr>
         ))}
       </DataTable>
+      {pool && <ConnectionPoolDialog connection={pool} request={request} csrf={csrf} Modal={Modal} onClose={() => setPool(null)} onSaved={onRefresh} />}
     </section>
   )
 }
@@ -1568,7 +1573,7 @@ function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
             <input
               required
               readOnly={Boolean(initialRoute)}
-              pattern="[a-z][a-z0-9_.-]{0,39}"
+              pattern={'[a-z][a-z0-9_.\\-]{0,39}'}
               title="小写字母开头，可包含数字、点号、下划线和短横线"
               value={form.id}
               onChange={(e) => update('id', e.target.value)}
@@ -1717,6 +1722,7 @@ function RouteDialog({ data, csrf, initialRoute, onClose, onSaved }) {
 function Routes({ data, csrf, onRefresh, onAdd, onEdit }) {
   const rows = data?.routes || []
   const [message, setMessage] = useState('')
+  const [preview, setPreview] = useState(null)
   async function remove(id) {
     if (!window.confirm(`删除路由 route/${id}？`)) return
     try {
@@ -1770,6 +1776,7 @@ function Routes({ data, csrf, onRefresh, onAdd, onEdit }) {
                 </td>
                 <td className="row-menu">
                   <div className="route-row-actions">
+                    <button className="plan-open" onClick={() => setPreview(route)} disabled={route.enabled === false}><Activity size={14} />预览</button>
                     <button
                       type="button"
                       onClick={() => onEdit(route)}
@@ -1794,6 +1801,8 @@ function Routes({ data, csrf, onRefresh, onAdd, onEdit }) {
           })}
         </DataTable>
       </section>
+      <NetworkPanel request={request} csrf={csrf} />
+      {preview && <RoutePlanDialog route={preview} request={request} Modal={Modal} onClose={() => setPreview(null)} />}
     </div>
   )
 }
@@ -2404,167 +2413,8 @@ function SettingsPage({ settings, theme, onThemeChange, onSave, onNavigate }) {
   )
 }
 
-function Automation({ data, csrf, onRefresh }) {
-  const initial = data?.automation || {}
-  const [form, setForm] = useState(initial)
-  const [busy, setBusy] = useState('')
-  const [message, setMessage] = useState('')
-  useEffect(() => setForm(initial), [data])
-  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
-  async function save(event) {
-    event.preventDefault()
-    setBusy('save')
-    setMessage('')
-    try {
-      await request('unified/automation', { method: 'PATCH', body: form, csrf })
-      setMessage('自动任务设置已保存')
-      await onRefresh()
-    } catch (err) {
-      setMessage(err.message)
-    } finally {
-      setBusy('')
-    }
-  }
-  async function run(action) {
-    setBusy(action)
-    setMessage('')
-    try {
-      const result = await request(`unified/automation/run/${action}`, { method: 'POST', body: {}, csrf })
-      const sum = result.result?.summary || {}
-      setMessage(`${action === 'checkin' ? '签到' : '刷新'}完成：成功 ${sum.succeeded || 0}，失败 ${sum.failed || 0}`)
-      await onRefresh()
-    } catch (err) {
-      setMessage(err.message)
-    } finally {
-      setBusy('')
-    }
-  }
-  return (
-    <div className="settings-grid">
-      <form className="content-card" onSubmit={save}>
-        <span className="section-label">计划任务</span>
-        <h2>签到与余额刷新</h2>
-        <label className="switch-row">
-          <span>
-            <strong>每日自动签到</strong>
-            <small>包含 WorkBuddy 国际站每日活跃；按服务器所在时区执行</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={Boolean(form.auto_checkin)}
-            onChange={(e) => update('auto_checkin', e.target.checked)}
-          />
-        </label>
-        <label className="switch-row">
-          <span>
-            <strong>自动领取福利</strong>
-            <small>Qoder 福利、国内成长任务、连续签到奖励与猫猫旅行</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={Boolean(form.auto_benefits)}
-            onChange={(e) => update('auto_benefits', e.target.checked)}
-          />
-        </label>
-        <label>每日签到时间</label>
-        <input
-          type="time"
-          value={form.checkin_time || '09:00'}
-          onChange={(e) => update('checkin_time', e.target.value)}
-        />
-        <label className="switch-row">
-          <span>
-            <strong>自动刷新状态与余额</strong>
-            <small>同步凭据状态并查询最新额度</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={Boolean(form.auto_refresh)}
-            onChange={(e) => update('auto_refresh', e.target.checked)}
-          />
-        </label>
-        <label>刷新间隔（分钟）</label>
-        <input
-          type="number"
-          min="5"
-          max="1440"
-          value={form.refresh_minutes || 30}
-          onChange={(e) => update('refresh_minutes', Number(e.target.value))}
-        />
-        <button className="button primary wide" disabled={Boolean(busy)}>
-          <Save size={15} />
-          {busy === 'save' ? '正在保存…' : '保存设置'}
-        </button>
-      </form>
-      <section className="content-card">
-        <span className="section-label">告警</span>
-        <h2>Webhook 通知</h2>
-        <label>Webhook 地址</label>
-        <input
-          type="url"
-          value={form.webhook_url || ''}
-          onChange={(e) => update('webhook_url', e.target.value)}
-          placeholder="https://example.com/webhook"
-        />
-        <label>低余额阈值</label>
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          value={form.low_balance || 0}
-          onChange={(e) => update('low_balance', Number(e.target.value))}
-        />
-        <label className="switch-row">
-          <span>
-            <strong>任务失败时通知</strong>
-            <small>只发送账号 ID、状态和余额，不发送凭据</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={form.notify_failures !== false}
-            onChange={(e) => update('notify_failures', e.target.checked)}
-          />
-        </label>
-        <div className="inline-actions">
-          <button className="button secondary" onClick={() => run('checkin')} disabled={Boolean(busy)}>
-            <Play size={14} />
-            {busy === 'checkin' ? '执行中…' : '立即签到'}
-          </button>
-          <button className="button secondary" onClick={() => run('refresh')} disabled={Boolean(busy)}>
-            <RefreshCw size={14} className={busy === 'refresh' ? 'spin' : ''} />
-            {busy === 'refresh' ? '执行中…' : '立即刷新'}
-          </button>
-        </div>
-      </section>
-      {message && <div className="result-banner settings-message">{message}</div>}
-      <section className="content-card settings-wide">
-        <div className="section-head">
-          <div>
-            <span className="section-label">执行历史</span>
-            <h2>最近自动任务</h2>
-          </div>
-        </div>
-        <DataTable
-          columns={['时间', '任务', '触发方式', '结果']}
-          empty={!data?.automation_history?.length && '还没有执行记录'}
-        >
-          {(data?.automation_history || []).map((item, index) => (
-            <tr key={`${item.time}-${index}`}>
-              <td>{new Date(item.time * 1000).toLocaleString('zh-CN')}</td>
-              <td>{item.action === 'checkin' ? '签到' : '刷新'}</td>
-              <td>{item.manual ? '手动' : '自动'}</td>
-              <td>
-                <StatusBadge status={item.ok ? 'ready' : 'error'} />
-                <small>
-                  {item.summary ? `成功 ${item.summary.succeeded || 0} / 失败 ${item.summary.failed || 0}` : item.error}
-                </small>
-              </td>
-            </tr>
-          ))}
-        </DataTable>
-      </section>
-    </div>
-  )
+function Automation(props) {
+  return <AutomationCenter {...props} request={request} />
 }
 
 function Backup({ csrf }) {

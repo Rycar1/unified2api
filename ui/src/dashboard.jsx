@@ -233,10 +233,12 @@ function AccountHealth({ data, onNavigate }) {
 function AutomationDigest({ data, onNavigate }) {
   const settings = data.automation || {},
     history = (data.automation_history || []).slice(0, 3)
+  const plans = settings.schedules?.filter((row) => row.enabled)
+  const accountRules = (settings.account_refresh || []).filter((row) => row.enabled)
   const scheduled = [
-    ['每日签到', settings.auto_checkin, `每日 ${settings.checkin_time || '09:00'}`],
+    ['每日签到', settings.auto_checkin && (!plans || plans.length > 0), plans ? `${plans.length} 条签到计划` : `每日 ${settings.checkin_time || '09:00'}`],
     ['自动领取福利', settings.auto_benefits, `每日 ${settings.checkin_time || '09:00'}`],
-    ['余额刷新', settings.auto_refresh, `每 ${settings.refresh_minutes || 30} 分钟`],
+    ['余额刷新', settings.auto_refresh || accountRules.length > 0, accountRules.length ? `${accountRules.length} 个账号独立刷新` : `每 ${settings.refresh_minutes || 30} 分钟`],
   ]
   return (
     <section className="content-card dashboard-automation">
@@ -262,7 +264,7 @@ function AutomationDigest({ data, onNavigate }) {
               >
                 {row.ok === true ? '已完成' : row.ok === false ? '有失败' : '未知'}
               </span>
-              <span>{actionName(row.action)}</span>
+              <span>{row.label || (row.action === 'balance' ? '查询余额' : actionName(row.action))}</span>
               <time>{dateText(row.time)}</time>
             </li>
           ))}
