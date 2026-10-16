@@ -183,6 +183,9 @@ class API:
         req = Request(scope, receive)
         try:
             self.buddy.state.store.check_api(req.headers.get("authorization"), req.headers.get("x-api-key"))
+            probe_token = req.headers.get('authorization', '').removeprefix('Bearer ').strip() or req.headers.get('x-api-key', '')
+            if digest(probe_token) in getattr(self.buddy.state.store, 'test_keys', ()):
+                scope.setdefault('state', {})['connection_probe'] = True
             if path == "/v1/models" and req.method == "GET":
                 catalog = await self.models()
                 if self.controls:
@@ -262,6 +265,8 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     metrics = RequestMetrics()
     login_owners = {}
     unified_config = UnifiedConfig(store)
+    from .network import NetworkSettings
+    network = NetworkSettings(unified_config)
     if embedded_workbuddy:
         embedded_workbuddy.config=unified_config
     workbuddy_login.runtime=embedded_workbuddy
@@ -303,6 +308,8 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     capabilities = ModelCapabilities(unified_config)
     releases = ReleaseManager(store.root / "releases")
     api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts,controls,capabilities)
+    api.network = network
+    connections.network = network
     register_controls(app,body_json,store,api,request_log,controls,capabilities,releases)
     from .task_center import TaskCenter
     task_center=TaskCenter(unified_config,store,pool,qoder_accounts,workbuddy_login,native)
@@ -471,7 +478,11 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         store.require_admin(req)
         return await trae("GET", "/admin/api/credits")
 
-    async def run_maintenance(action):
+    async def run_maintenance(action, providers=None, account=None, exclude_accounts=None):
+        if providers is not None or account is not None or exclude_accounts is not None:
+            from .maintenance import ScopedMaintenance
+            runner = ScopedMaintenance(store, pool, native, qoder_accounts, workbuddy_login, connections, task_center)
+            return await runner.run(action, providers, account, exclude_accounts)
         if action=='benefits': return await task_center.run_all_benefits()
         groups = []
         try:
@@ -634,6 +645,24 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         store.require_admin(req)
         return connections.delete(cid) if req.method == "DELETE" else connections.save(await body_json(req), cid)
 
+    @app.api_route('/admin/api/unified/connections/{cid}/accounts', methods=['GET', 'POST'])
+    async def custom_accounts(cid: str, req: Request):
+        store.require_admin(req)
+        if req.method == 'POST':
+            return connections.save_account(cid, await body_json(req))
+        row = connections.get(cid)
+        return {'accounts': connections.pool_inventory(cid)['candidates'], 'balance_scheme': row.get('balance_scheme', 'none')}
+
+    @app.api_route('/admin/api/unified/connections/{cid}/accounts/{aid}', methods=['PATCH', 'DELETE'])
+    async def custom_account(cid: str, aid: str, req: Request):
+        store.require_admin(req)
+        return connections.delete_account(cid, aid) if req.method == 'DELETE' else connections.save_account(cid, await body_json(req), aid)
+
+    @app.post('/admin/api/unified/connections/{cid}/accounts/{aid}/balance')
+    async def custom_balance(cid: str, aid: str, req: Request):
+        store.require_admin(req)
+        return await connections.balance(cid, aid)
+
     async def routable_models():
         models = {item["id"] for item in (await api.models())["data"] if not item["id"].startswith("route/")}
         models.update(qoder_accounts.legacy_model_ids())
@@ -643,6 +672,26 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     async def list_routes(req: Request):
         store.require_admin(req)
         return {"routes": routes.rows()}
+
+    @app.get('/admin/api/unified/routes/{rid}/plan')
+    async def route_plan(rid: str, req: Request, protocol: str = 'chat'):
+        store.require_admin(req)
+        if protocol not in {'chat', 'responses', 'messages', 'compact'}:
+            raise HTTPException(400, '不支持的接口协议')
+        from .routing import inventory
+        route = routes.get(rid)
+        snapshot = await inventory(api)
+        by_model = {target: snapshot.get(target.partition('/')[0], {}) for target in route['targets']}
+        supported = {}
+        for target in route['targets']:
+            cap = capabilities.describe({'id': target})
+            supported[target] = cap.get('compact') is True if protocol == 'compact' else cap['protocols'][protocol] != 'unsupported'
+        return routes.explain(rid, by_model, supported)
+
+    @app.api_route('/admin/api/unified/network', methods=['GET', 'PATCH'])
+    async def network_settings(req: Request):
+        store.require_admin(req)
+        return {'settings': network.update(await body_json(req)) if req.method == 'PATCH' else network.get()}
 
     @app.post("/admin/api/unified/routes")
     async def add_route(req: Request):
@@ -701,7 +750,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     @app.get("/admin/api/unified/automation")
     async def automation_status(req: Request):
         store.require_admin(req)
-        return {"settings": automation.settings(), "history": unified_config.get("automation_history", [])}
+        return {"settings": automation.settings(), "history": unified_config.get("automation_history", []), **automation.status()}
 
     @app.patch("/admin/api/unified/automation")
     async def update_automation(req: Request):
@@ -712,6 +761,11 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     async def run_automation(action: str, req: Request):
         store.require_admin(req)
         return await automation.execute(action, manual=True)
+
+    @app.post('/admin/api/unified/automation/plans/{pid}/run')
+    async def run_automation_plan(pid: str, req: Request):
+        store.require_admin(req)
+        return await automation.run_plan(pid)
 
     @app.post("/admin/api/unified/backup/export")
     async def export_backup(req: Request):

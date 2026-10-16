@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
+from .schedules import ScheduledAutomation, validate_plans
 
 
 ROUTE_ID = re.compile(r"^[a-z][a-z0-9_.-]{0,39}$")
@@ -137,7 +138,7 @@ class RouteManager:
             raise HTTPException(404, "路由不存在或已停用")
         return route
 
-    def candidates(self, rid):
+    def candidates(self, rid, peek=False):
         route = self.get(rid)
         with self.lock:
             health = json.loads(json.dumps(self.health))
@@ -147,7 +148,8 @@ class RouteManager:
         if route["strategy"] == "round_robin" and targets:
             with self.lock:
                 offset = self.cursors[rid] % len(targets)
-                self.cursors[rid] += 1
+                if not peek:
+                    self.cursors[rid] += 1
             targets = targets[offset:] + targets[:offset]
         elif route["strategy"] == "latency":
             targets.sort(key=lambda target: health.get(target, {}).get("avg_duration_ms", float("inf")))
@@ -404,7 +406,7 @@ class RequestLogMiddleware:
                 "outcome": outcome, **usage})
 
 
-class AutomationManager:
+class AutomationManager(ScheduledAutomation):
     def __init__(self, config, runner, clock=time.time):
         self.config, self.runner, self.clock = config, runner, clock
         self.running = asyncio.Lock()
@@ -414,6 +416,8 @@ class AutomationManager:
         return self.config.get("automation", {})
 
     def update(self, value):
+        if not isinstance(value, dict):
+            raise HTTPException(400, '自动任务设置格式无效')
         old = self.settings()
         result = dict(old)
         for key in ("auto_checkin", "auto_refresh", "notify_failures", "auto_benefits"):
@@ -438,23 +442,28 @@ class AutomationManager:
             raise HTTPException(400, "Webhook 地址必须使用 HTTP 或 HTTPS")
         result.update(checkin_time=checkin_time, refresh_minutes=refresh_minutes,
                       low_balance=low_balance, webhook_url=webhook.strip())
+        validate_plans(value, result)
         self.config.set("automation", result)
         return result
 
-    async def execute(self, action, manual=False):
-        if action not in {"checkin", "refresh", "benefits"}:
+    async def execute(self, action, manual=False, scope=None, task_id=None, label=None):
+        if action not in {"checkin", "refresh", "benefits", "balance"}:
             raise HTTPException(400, "不支持的自动任务")
+        if action == 'balance' and not (scope or {}).get('account'):
+            raise HTTPException(400, '余额任务需要指定账号')
         if self.running.locked():
             raise HTTPException(409, "已有自动任务正在运行")
         async with self.running:
             started = int(self.clock())
             try:
-                result = await self.runner(action)
+                result = await self.runner(action, **(scope or {}))
                 ok = result.get("summary", {}).get("failed", 0) == 0
             except Exception as exc:
                 result, ok = {"error": str(exc)[:300]}, False
             record = {"time": started, "action": action, "manual": manual, "ok": ok,
                       "summary": result.get("summary", {}), "error": result.get("error")}
+            if task_id:
+                record.update(task_id=task_id, label=label)
             history = self.config.get("automation_history", [])
             self.config.set("automation_history", ([record] + history)[:100])
             if action == "refresh":
@@ -489,18 +498,7 @@ class AutomationManager:
     async def loop(self):
         while True:
             await asyncio.sleep(30)
-            settings = self.settings()
-            now = datetime.fromtimestamp(self.clock())
-            history = self.config.get("automation_history", [])
-            checked_today = any(item.get("action") == "checkin" and
-                datetime.fromtimestamp(item.get("time", 0)).date() == now.date() for item in history)
-            if settings.get("auto_checkin") and now.strftime("%H:%M") >= settings.get("checkin_time", "09:00") and not checked_today:
-                await self.execute("checkin")
-            benefits_today=any(item.get('action')=='benefits' and datetime.fromtimestamp(item.get('time',0)).date()==now.date() for item in history)
-            if settings.get('auto_benefits') and now.strftime('%H:%M')>=settings.get('checkin_time','09:00') and not benefits_today:
-                await self.execute('benefits')
-            if settings.get("auto_refresh") and self.clock() - self.last_refresh >= settings.get("refresh_minutes", 30) * 60:
-                await self.execute("refresh")
+            await self.tick()
 
 
 class BackupManager:

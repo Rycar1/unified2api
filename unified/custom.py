@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from admin.server import write_json
 from unified.errors import safe_error_message
+from .custom_pool import CustomPool
 
 
 async def _bounded_body(response, limit=64 * 1024):
@@ -22,12 +23,13 @@ async def _bounded_body(response, limit=64 * 1024):
     return content.decode("utf-8", errors="replace")
 
 
-class Connections:
+class Connections(CustomPool):
     def __init__(self, path, transport=None):
         self.path, self.transport = path, transport
         self.lock = threading.RLock()
         self.data = json.loads(path.read_text("utf-8")) if path.exists() else {}
         self._migrate_workbuddy()
+        self.init_pool()
 
     def _migrate_workbuddy(self):
         # Older releases stored the built-in international pool as a custom
@@ -46,7 +48,9 @@ class Connections:
             self.data = updated
 
     def client(self, kind="openai"):
-        return httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(900 if kind == "workbuddy_intl" else 300, connect=20),
+        network = getattr(self, 'network', None)
+        read_timeout = max(network.get().values()) if network else 900 if kind == 'workbuddy_intl' else 300
+        return httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(None, read=read_timeout, connect=20),
                                  follow_redirects=False, trust_env=False)
 
     def get(self, cid):
@@ -57,14 +61,16 @@ class Connections:
 
     def rows(self):
         with self.lock:
-            return [{k: v for k, v in row.items() if k != "key"} | {"has_key": bool(row["key"])}
+            return [{k: copy.deepcopy(v) for k, v in row.items() if k not in {"key", "balance_key", "accounts"}} |
+                    {"has_key": bool(row["key"]), "has_balance_key": bool(row.get('balance_key')),
+                     "accounts": [self.public_account(row['id'], a) for a in self.ensure_accounts(row)]}
                     for row in self.data.values()]
 
     def validate(self, body, old=None):
         row = dict(old or {})
-        for field in ("id", "name", "base_url", "key", "models", "enabled", "kind", "adapter"):
+        for field in ("id", "name", "base_url", "key", "models", "enabled", "kind", "adapter", "balance_scheme", "balance_key", "balance_user_id"):
             if field in body:
-                if field == "key" and old and body[field] == "":
+                if field in {"key", "balance_key"} and old and body[field] == "":
                     continue
                 row[field] = body[field]
         cid = row.get("id", "")
@@ -99,6 +105,18 @@ class Connections:
         row.setdefault("enabled", True)
         if type(row["enabled"]) is not bool:
             raise HTTPException(400, "启用状态必须为布尔值")
+        if row.get('balance_scheme', 'none') not in {'none', 'deepseek', 'newapi', 'sub2api'}:
+            raise HTTPException(400, '不支持的余额查询方案')
+        for field in ('balance_key', 'balance_user_id'):
+            if not isinstance(row.get(field, ''), str) or len(row.get(field, '')) > 8192 or any(c in row.get(field, '') for c in '\r\n\0'):
+                raise HTTPException(400, '余额查询凭据格式无效')
+        self.ensure_accounts(row)
+        if body.get('key'):
+            row['accounts'][0]['key'] = row['key']
+            row['accounts'][0].pop('balance', None)
+        if old and any(row.get(k) != old.get(k) for k in ('base_url', 'balance_scheme', 'balance_key', 'balance_user_id')):
+            for account in row['accounts']:
+                account.pop('balance', None)
         return row
 
     def save(self, body, cid=None):
@@ -163,7 +181,7 @@ class Connections:
                  "provider_name": row["name"]} for row in self.rows() if row["enabled"] for model in row["models"]]
 
     async def relay(self, cid, path, body, scope, receive, send):
-        return await self.relay_row(self.get(cid), path, body, scope, receive, send)
+        return await self.pooled_relay(cid, path, body, scope, receive, send)
 
     async def relay_row(self, row, path, body, scope, receive, send):
         if not row["enabled"]:

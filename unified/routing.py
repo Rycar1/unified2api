@@ -39,6 +39,9 @@ async def inventory(api):
             result['workbuddy'] = availability(await asyncio.wait_for(api.workbuddy.public_accounts(),4))
         except (HTTPException,asyncio.TimeoutError):
             pass
+    if api.connections:
+        for row in api.connections.rows():
+            result[row['id']] = api.connections.pool_inventory(row['id'])
     api.inventory_cache = (time.monotonic(),result)
     return result
 
@@ -59,17 +62,17 @@ async def dispatch(api,provider,scope,receive,send,body):
         if account and span is not None:
             span.update(account_id=account['id'],account_name=account.get('name',''))
         await send(message)
-    try:
+    async def forward(emit):
         if provider=='trae':
-            return await api.stream_native(scope,receive,observe,body)
+            return await api.stream_native(scope,receive,emit,body)
         if provider=='monkeycode':
-            return await api.stream_native({**scope,'path':'/monkey'+scope['path']},receive,observe,body)
+            return await api.stream_native({**scope,'path':'/monkey'+scope['path']},receive,emit,body)
         if provider in {'qoder','qoder-cn'}:
-            return await api.qoder.relay(scope['path'],body,scope,receive,observe)
+            return await api.qoder.relay(scope['path'],body,scope,receive,emit)
         if provider=='workbuddy':
-            return await api.workbuddy.relay(scope['path'],body,scope,receive,observe)
+            return await api.workbuddy.relay(scope['path'],body,scope,receive,emit)
         if provider!='codebuddy':
-            return await api.connections.relay(provider,scope['path'],body,scope,receive,observe)
+            return await api.connections.relay(provider,scope['path'],body,scope,receive,emit)
         sent = False
         async def replay():
             nonlocal sent
@@ -79,7 +82,13 @@ async def dispatch(api,provider,scope,receive,send,body):
             return await receive()
         child = {**scope,'headers':[(k,v) for k,v in scope['headers'] if k.lower() not in {b'content-length',b'cookie'}]}
         child['headers'].append((b'content-length',str(len(body)).encode()))
-        return await api.buddy(child,replay,observe)
+        return await api.buddy(child,replay,emit)
+    try:
+        network = getattr(api, 'network', None)
+        if network and provider in {'trae', 'monkeycode', 'codebuddy', 'workbuddy', 'qoder', 'qoder-cn'}:
+            from .network import guarded_response
+            return await guarded_response(forward, observe, scope['path'], network.get())
+        return await forward(observe)
     except HTTPException as exc:
         observation.status,observation.error,observation.completed = exc.status_code,True,True
         raise

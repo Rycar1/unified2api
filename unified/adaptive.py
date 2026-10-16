@@ -23,10 +23,10 @@ class AdaptiveRoutes(RouteManager):
             route[key] = number
         return route
 
-    def candidates(self,rid,inventory=None):
+    def candidates(self,rid,inventory=None,peek=False):
         route = self.get(rid)
         if route['strategy']!='smart':
-            return super().candidates(rid)
+            return super().candidates(rid,peek=peek)
         inventory = inventory or {}
         with self.lock:
             ready = [model for model in route['targets'] if self.health.get(model,{}).get('cooldown_until',0)<=self.clock()
@@ -41,6 +41,34 @@ class AdaptiveRoutes(RouteManager):
                 return (1+self.active[model]+inventory.get(model,{}).get('active',0))*(1+max(0,elapsed)/1000)/reliability
             ready.sort(key=score)
         return route,ready[:route['retries']+1]
+
+    def explain(self, rid, inventory, supported=None):
+        route, targets = self.candidates(rid, inventory, peek=True)
+        supported = supported or {}
+        targets = [t for t in targets if supported.get(t, True)]
+        selected = targets[0] if targets else None
+        items = []
+        for target in route['targets']:
+            health = self.health.get(target, {})
+            snapshot = inventory.get(target, {})
+            state, reason = 'standby', '备用目标'
+            if not supported.get(target, True):
+                state, reason = 'protocol', '不支持选定的接口协议'
+            elif route['strategy'] == 'smart' and snapshot.get('available') is False:
+                state, reason = 'unavailable', '没有余额和状态均可用的账号'
+            elif route['strategy'] == 'smart' and self.active[target] >= route['max_concurrency']:
+                state, reason = 'concurrency', '当前目标并发已满'
+            elif health.get('cooldown_until', 0) > self.clock():
+                state, reason = ('fallback', '全部目标冷却，按现有策略再试一次') if target in targets else ('cooldown', '失败冷却中')
+            elif target == selected:
+                state, reason = 'selected', '下次请求优先尝试此目标'
+            elif target not in targets:
+                state, reason = 'retry_limit', '超出本次最大尝试次数'
+            items.append({'model': target, 'state': state, 'reason': reason,
+                          'position': targets.index(target) + 1 if target in targets else None,
+                          'active': self.active[target], 'cooldown_until': health.get('cooldown_until', 0),
+                          'last_status': health.get('last_status'), 'accounts': snapshot.get('candidates', [])})
+        return {'id': rid, 'strategy': route['strategy'], 'selected': selected, 'items': items}
 
     @contextmanager
     def reserve(self,model,route):
@@ -70,4 +98,9 @@ def availability(rows):
              {'paused','invalid','expired','cooling','exhausted'} and row.get('pool_state') not in
              {'paused','invalid','cooling','exhausted'} and not row.get('disabled') and not row.get('cooling')]
     ready = [row for row in ready if row.get('remaining')!=0 or row.get('credits_stale') is True]
-    return {'available':bool(ready),'accounts':len(ready),'active':sum(row.get('inflight',row.get('in_flight',0)) for row in ready)}
+    candidates = [{'id':row.get('id',row.get('uid','')), 'name':row.get('name') or row.get('nickname') or row.get('uid',''),
+                   'status':row.get('status',row.get('pool_state','unknown')), 'enabled':row.get('enabled',True),
+                   'available':row in ready, 'remaining':row.get('remaining'),
+                   'active':row.get('inflight',row.get('in_flight',0))} for row in rows]
+    return {'available':bool(ready),'accounts':len(ready),'active':sum(row.get('inflight',row.get('in_flight',0)) for row in ready),
+            'candidates':candidates}
