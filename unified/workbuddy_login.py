@@ -84,7 +84,8 @@ class WorkBuddyLogin:
             credits = account.get("credits")
             remaining = credits.get("remain") if isinstance(credits, dict) else None
             expiry = account.get("expiresAt")
-            rows.append({"id": account["uid"], "uid": account["uid"], "provider": "workbuddy_intl",
+            credit_summary=self.credit_policy.summarize(credits.get('packages',[]),credits.get('fetched_at',credits.get('updated_at',0))) if isinstance(credits,dict) and hasattr(self,'credit_policy') else {}
+            rows.append({**credit_summary,"id": account["uid"], "uid": account["uid"], "provider": "workbuddy_intl",
                          "name": account.get("nickname") or account["uid"], "enabled": account.get("enabled", False),
                          "status": "paused" if not account.get("enabled") else "cooling" if account.get("inCooldown") else "ready",
                          "remaining": remaining if isinstance(remaining, (int, float)) else None,
@@ -127,7 +128,12 @@ class WorkBuddyLogin:
             ready = [account for account in accounts if account.get("enabled") and not account.get("inCooldown")
                      and (account.get("credits") or {}).get("remain")!=0
                      and self.active.get(account["uid"],0)<trace.max_account_concurrency]
-            ready.sort(key=lambda account:(self.active.get(account["uid"],0),-((account.get("credits") or {}).get("remain") or 0)))
+            def order(account):
+                credits=account.get('credits') or {}
+                policy=getattr(self,'credit_policy',None)
+                preference=policy.priority(policy.summarize(credits.get('packages',[]),credits.get('fetched_at',credits.get('updated_at',0)))) if policy else (1,float('inf'))
+                return self.active.get(account['uid'],0),preference,-(credits.get('remain') or 0)
+            ready.sort(key=order)
             if not ready:
                 raise HTTPException(503,"WorkBuddy 当前账号的额度或并发已达上限")
             for index,account in enumerate(ready):

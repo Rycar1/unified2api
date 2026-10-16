@@ -58,6 +58,11 @@ def install(proxy):
     pool_class=proxy.wb_accounts.AccountPool
     original_pick=pool_class.pick_for_session
     def pick(pool,*args,**kwargs):
+        policy=getattr(pool,'credit_policy',None)
+        if policy:
+            settings=policy.settings()
+            for item in list(pool.accounts):
+                if item.realm=='intl': item.expiring_window_days=settings['window_days'] if settings['enabled'] else 0
         forced=getattr(_REQUEST,'forced',None)
         if forced:
             account=pool.get(forced)

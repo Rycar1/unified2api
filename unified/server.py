@@ -292,6 +292,11 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     metrics = RequestMetrics()
     login_owners = {}
     unified_config = UnifiedConfig(store)
+    from .credit_policy import CreditPolicy
+    credit_policy=CreditPolicy(unified_config)
+    pool.credit_policy=credit_policy
+    workbuddy_login.credit_policy=credit_policy
+    if embedded_workbuddy: embedded_workbuddy.credit_policy=credit_policy
     from .network import NetworkSettings
     network = NetworkSettings(unified_config)
     if embedded_workbuddy:
@@ -320,15 +325,17 @@ def create_app(native=None, buddy=None, qoder_transport=None):
             await stack.enter_async_context(buddy.router.lifespan_context(buddy))
             automation_task = asyncio.create_task(automation.loop())
             probe_task = asyncio.create_task(probes.loop())
+            credit_task = asyncio.create_task(credit_policy.loop(store,workbuddy_login,notify_expiring))
             qoder_refresh_task = asyncio.create_task(qoder_accounts.maintain())
             try:
                 yield
             finally:
                 automation_task.cancel()
                 probe_task.cancel()
+                credit_task.cancel()
                 if probes.task: probes.task.cancel()
                 qoder_refresh_task.cancel()
-                await asyncio.gather(automation_task, probe_task, qoder_refresh_task, *([probes.task] if probes.task else []), return_exceptions=True)
+                await asyncio.gather(automation_task, probe_task, credit_task, qoder_refresh_task, *([probes.task] if probes.task else []), return_exceptions=True)
                 await qoder_accounts.close()
                 native.close()
 
@@ -347,6 +354,9 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     from .reliability_api import register_probes
     register_probes(app,body_json,store,api,probes)
     app.state.probes=probes
+    from .reliability_api import register_credits
+    register_credits(app,body_json,store,workbuddy_login,credit_policy)
+    app.state.credit_policy=credit_policy
     api.network = network
     connections.network = network
     register_controls(app,body_json,store,api,request_log,controls,capabilities,releases)
@@ -588,6 +598,19 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         return await run_maintenance("checkin")
 
     automation = AutomationManager(unified_config, run_maintenance)
+    async def reliability_notify(event,payload):
+        url=automation.settings().get('webhook_url')
+        if not url: return False
+        try:
+            async with httpx.AsyncClient(timeout=10,follow_redirects=False) as client:
+                response=await client.post(url,json={'event':event,**payload})
+                return 200<=response.status_code<300
+        except httpx.HTTPError: return False
+    async def notify_probe(record):
+        return await reliability_notify('unified2api.probe',record)
+    async def notify_expiring(items):
+        return await reliability_notify('unified2api.expiring_credits',{'accounts':items})
+    probes.notify=notify_probe
 
     @app.post("/admin/api/unified/trae/login")
     async def login(req: Request):

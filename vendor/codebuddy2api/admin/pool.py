@@ -102,6 +102,7 @@ class AccountPool:
                         "today_checked_in": status.get("checkin_date") == today, "cooldown_until": status.get("cooldown_until", 0),
                         "last_error": status.get("last_error"), "token_refreshed": status.get("token_refreshed"),
                         "request_count": status.get("request_count", 0)})
+            row.update({key:status.get(key) for key in ('credit_expires_at','expiring_credits','credit_fetched_at')})
             row["inflight"] = self.active.get(row["id"],0)
         return rows
 
@@ -119,11 +120,16 @@ class AccountPool:
                 def score(row):
                     status = self.store.data["account_status"].get(row["id"],{})
                     balance = status.get("remaining") if status.get("credits_updated",0)>self.clock()-600 else None
-                    return self.active.get(row["id"],0),-(balance if isinstance(balance,(int,float)) else 0)
+                    preference=self.credit_policy.priority(status) if hasattr(self,'credit_policy') else (1,float('inf'))
+                    return self.active.get(row["id"],0),preference,-(balance if isinstance(balance,(int,float)) else 0)
                 candidates.sort(key=score)
                 aid = candidates[0]["id"]
             else:
                 aid = candidates[self.cursor % len(candidates)]["id"]
+                if hasattr(self,'credit_policy'):
+                    urgent=[r for r in candidates if self.credit_policy.priority(self.store.data['account_status'].get(r['id'],{}))[0]==0]
+                    if urgent:
+                        aid=min(urgent,key=lambda r:(self.active.get(r['id'],0),self.credit_policy.priority(self.store.data['account_status'][r['id']])) )['id']
             self.cursor += 1
             self.active[aid] = self.active.get(aid,0)+1
             item = self.store.data["accounts"][aid]
@@ -174,6 +180,7 @@ class AccountPool:
             packages.extend(current)
             if len(packages) >= total:
                 result=summarize_packages(packages)
+                if hasattr(self,'credit_policy'): result.update(self.credit_policy.summarize(packages))
                 if include_details:
                     fields={'PackageName','PackageCode','PackageStartTime','PackageEndTime','CapacityRemain','CapacityRemainPrecise',
                             'CapacitySize','CapacitySizePrecise','CycleCapacityRemain','CycleCapacityRemainPrecise','CycleCapacitySize',

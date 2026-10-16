@@ -35,6 +35,7 @@ class EmbeddedWorkBuddy:
         self.server.block_on_close = False
         try:
             self.proxy._bootstrap_runtime(args)
+            if getattr(self,'credit_policy',None): self.proxy.POOL.credit_policy=self.credit_policy
             from .workbuddy_activity import ActivityConfig,WebActivity
             config=getattr(self,'config',None) or ActivityConfig(Path(self.accounts_dir)/'.unified-web-activity')
             self.activity=WebActivity(config)

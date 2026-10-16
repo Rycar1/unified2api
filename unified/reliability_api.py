@@ -48,3 +48,15 @@ def register_probes(app,body_json,store,api,probes):
     async def run(req:Request):
         store.require_admin(req)
         return probes.start()
+
+
+def register_credits(app,body_json,store,workbuddy,policy):
+    @app.api_route('/admin/api/unified/credit-policy',methods=['GET','PATCH'])
+    async def settings(req:Request):
+        store.require_admin(req)
+        return {'settings':policy.update(await body_json(req)) if req.method=='PATCH' else policy.settings()}
+
+    @app.get('/admin/api/unified/credit-policy/expiring')
+    async def expiring(req:Request):
+        store.require_admin(req)
+        return await policy.expiring(store,workbuddy)
