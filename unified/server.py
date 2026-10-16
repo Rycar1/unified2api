@@ -273,7 +273,8 @@ class API:
                 chain=scope.get('unified_route_chain',())
                 if model in chain or len(chain)>=8:
                     raise HTTPException(400,{'code':'route_cycle','message':'模型别名与路由形成循环引用，请调整路由目标'})
-                scope={**scope,'unified_route_chain':(*chain,model)}
+                state=scope.setdefault('state',{})
+                scope={**scope,'state':state,'unified_route_chain':(*chain,model)}
                 return await self.route_request(model, scope, receive, send, data)
             if provider in {"trae", "monkeycode"} and path != "/v1/chat/completions":
                 raise HTTPException(400, "此平台当前仅支持 Chat Completions")
