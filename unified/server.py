@@ -75,6 +75,18 @@ class API:
         self.workbuddy = workbuddy
         self.qoder = qoder
         self.controls, self.capabilities = controls, capabilities
+        self.catalog = []
+        self.aliases = None
+
+    def validation_catalog(self):
+        rows=list(self.catalog)
+        rows += [{'id':'codebuddy/'+m} for m in converter.get_available_models()]
+        if self.connections: rows += self.connections.models()
+        if self.routes: rows += self.routes.public_models()
+        runtime=getattr(self.workbuddy,'runtime',None)
+        if runtime and runtime.proxy:
+            rows += [{'id':'workbuddy/'+m} for m in runtime.proxy.INTL_UI_ORDER]
+        return list({r['id']:r for r in rows}.values())
 
     async def models(self):
         code, result = await self.native.request("GET", "/v1/models")
@@ -127,6 +139,8 @@ class API:
                     model['max_completion_tokens']=model['max_output_tokens']
                 if model['id'].startswith('route/'):
                     model['limits_source']='route-targets'
+        self.catalog=models
+        if self.aliases: models=models+self.aliases.models(models)
         return {"object": "list", "data": models, "unavailable_providers": unavailable}
 
     async def route_request(self, rid, scope, receive, send, data):
@@ -195,7 +209,8 @@ class API:
                         kid = next((kid for kid,row in self.buddy.state.store.data["keys"].items() if row["hash"]==digest(token)),None)
                     if kid and not self.controls.policy(kid)["enabled"]:
                         raise HTTPException(403,"该密钥已暂停")
-                    catalog["data"] = [row for row in catalog["data"] if self.controls.allowed(kid,row["id"])]
+                    catalog["data"] = [row for row in catalog["data"] if self.controls.allowed(kid,row["id"])
+                                       and (not row.get('alias_target') or self.controls.allowed(kid,row['alias_target']))]
                 return await JSONResponse(catalog)(scope, receive, send)
             if path not in PATHS or req.method != "POST":
                 raise HTTPException(404, "接口不存在")
@@ -211,6 +226,17 @@ class API:
                 raise HTTPException(400, "请求必须是 JSON")
             if not isinstance(data, dict) or not isinstance(data.get("model"), str):
                 raise HTTPException(400, "请指定带平台前缀的模型")
+            requested=data['model']
+            if self.aliases:
+                resolved=self.aliases.resolve(requested,self.validation_catalog())
+                if resolved!=requested:
+                    from .diagnostics import CURRENT_TRACE
+                    trace=CURRENT_TRACE.get()
+                    kid=trace.key_id if trace else next((k for k,r in self.buddy.state.store.data['keys'].items() if r['hash']==digest(probe_token)),None)
+                    if self.controls and (not self.controls.allowed(kid,requested) or not self.controls.allowed(kid,resolved)):
+                        raise HTTPException(403,'该密钥没有访问别名及其目标模型的权限')
+                    data={**data,'model':resolved}
+                    scope.setdefault('state',{})['resolved_model']=resolved
             provider, sep, model = data["model"].partition("/")
             custom_ids = {r["id"] for r in self.connections.rows()} if self.connections else set()
             providers = {"trae", "codebuddy", "monkeycode", "qoder", "qoder-cn"} | custom_ids
@@ -245,7 +271,8 @@ class API:
                 raise HTTPException(400, "请求包含无效数字或嵌套过深")
             return await dispatch(self,provider,scope,receive,send,body)
         except HTTPException as exc:
-            return await JSONResponse({"error": {"message": exc.detail, "type": "invalid_request_error"}}, exc.status_code)(scope, receive, send)
+            from .error_diagnosis import error_body
+            return await JSONResponse(error_body(exc), exc.status_code)(scope, receive, send)
 
 
 def create_app(native=None, buddy=None, qoder_transport=None):
@@ -308,6 +335,10 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     capabilities = ModelCapabilities(unified_config)
     releases = ReleaseManager(store.root / "releases")
     api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts,controls,capabilities)
+    from .model_aliases import ModelAliases
+    api.aliases = ModelAliases(unified_config)
+    from .reliability_api import register_aliases
+    register_aliases(app,body_json,store,api)
     api.network = network
     connections.network = network
     register_controls(app,body_json,store,api,request_log,controls,capabilities,releases)

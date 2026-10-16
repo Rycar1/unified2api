@@ -91,6 +91,8 @@ async def dispatch(api,provider,scope,receive,send,body):
         return await forward(observe)
     except HTTPException as exc:
         observation.status,observation.error,observation.completed = exc.status_code,True,True
+        from .error_diagnosis import classify_error
+        observation.error_info=classify_error(exc.detail,exc.status_code)
         raise
     finally:
         final = observation.finish()

@@ -10,10 +10,12 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from admin.server import digest
 from .features import RequestLog, _usage_from
+from .error_diagnosis import classify_error, diagnosis
 
 CURRENT_TRACE = ContextVar('unified_request_trace',default=None)
 ATTEMPT_FIELDS = {'kind','model','provider','account_id','account_name','status','outcome',
-                  'duration_ms','ttft_ms','finish_reason','upstream_request_id','prompt_tokens','completion_tokens'}
+                  'duration_ms','ttft_ms','finish_reason','upstream_request_id','prompt_tokens','completion_tokens',
+                  'error_category','upstream_code'}
 
 
 def note_account(provider, account_id, name=''):
@@ -31,6 +33,7 @@ class ResponseObservation:
         self.buffer = bytearray()
         self.usage = {}
         self.upstream_request_id = None
+        self.error_info = {}
 
     def value(self,event):
         if not isinstance(event,dict):
@@ -52,6 +55,9 @@ class ResponseObservation:
         error = event.get('error') or event.get('type') in {'error','response.failed','response.incomplete'}
         if error:
             self.error = True
+        if error or self.status is not None and self.status>=400:
+            found=classify_error(event,self.status)
+            if found.get('upstream_code') or not self.error_info: self.error_info=found
         for choice in event.get('choices',[]) if isinstance(event.get('choices',[]),list) else []:
             if not isinstance(choice,dict):
                 continue
@@ -118,7 +124,7 @@ class ResponseObservation:
         outcome = ('interrupted' if not self.completed else 'http_error' if self.status is None or not 200<=self.status<300 else
                    'stream_error' if self.error else 'missing_completion' if self.stream and not self.terminal else 'success')
         return {'status':self.status,'ok':ok,'outcome':outcome,'finish_reason':self.finish_reason,
-                'ttft_ms':self.ttft_ms,'duration_ms':round((self.clock()-self.started)*1000,2)}
+                'ttft_ms':self.ttft_ms,'duration_ms':round((self.clock()-self.started)*1000,2),**self.error_info}
 
 
 class Trace:
@@ -161,7 +167,7 @@ class DiagnosticLog(RequestLog):
             present = {row[1] for row in db.execute('PRAGMA table_info(requests)')}
             for field,kind in {'request_id':'TEXT','key_id':'TEXT','ttft_ms':'REAL','finish_reason':'TEXT','attempts':'TEXT',
                                'cached_tokens':'INTEGER','credits':'REAL','cost_cny':'REAL','cost_source':'TEXT',
-                               'tokens_per_second':'REAL'}.items():
+                               'tokens_per_second':'REAL','error_category':'TEXT','upstream_code':'TEXT'}.items():
                 if field not in present:
                     db.execute('ALTER TABLE requests ADD COLUMN '+field+' '+kind)
             db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_request_trace ON requests(request_id)')
@@ -182,13 +188,15 @@ class DiagnosticLog(RequestLog):
                     for item in (trace.attempts if trace else [])[:40]]
         fields = ['created','path','model','resolved_model','provider','status','ok','duration_ms','prompt_tokens',
                   'completion_tokens','reasoning_tokens','outcome','request_id','key_id','ttft_ms','finish_reason','attempts',
-                  'cached_tokens','credits','cost_cny','cost_source','tokens_per_second']
+                  'cached_tokens','credits','cost_cny','cost_source','tokens_per_second','error_category','upstream_code']
         model = str(row.get('model') or '')[:200]
         values = [int(time.time()),row['path'],model,row.get('resolved_model'),model.partition('/')[0],row.get('status'),
                   int(row['ok']),round(row['duration_ms']),row.get('prompt_tokens',0),row.get('completion_tokens',0),
                   row.get('reasoning_tokens',0),row['outcome'],trace.request_id if trace else None,trace.key_id if trace else None,
                   trace.response.ttft_ms if trace else None,trace.response.finish_reason if trace else None,json.dumps(attempts,separators=(',',':')),
-                  row.get('cached_tokens'),row.get('credits'),priced.get('cny'),priced.get('source'),rate]
+                  row.get('cached_tokens'),row.get('credits'),priced.get('cny'),priced.get('source'),rate,
+                  trace.response.error_info.get('error_category') if trace else row.get('error_category'),
+                  trace.response.error_info.get('upstream_code') if trace else row.get('upstream_code')]
         with self.lock,closing(self.connect()) as db:
             db.execute('INSERT INTO requests('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',values)
             db.execute('DELETE FROM requests WHERE created<?',(int(time.time())-self.retention_days*86400,))
@@ -202,6 +210,8 @@ class DiagnosticLog(RequestLog):
             raise HTTPException(404,'请求记录不存在或已过保留期')
         value = dict(row)
         value['attempts'] = json.loads(value.get('attempts') or '[]')
+        value['diagnosis'] = diagnosis(value)
+        for attempt in value['attempts']: attempt['diagnosis']=diagnosis(attempt)
         return value
 
     def query(self,limit=100,offset=0,model='',ok=None):
@@ -227,6 +237,7 @@ class DiagnosticLog(RequestLog):
             attempts = json.loads(value.pop('attempts',None) or '[]')
             account = attempts[-1] if attempts else {}
             value.update(account_id=account.get('account_id'),account_name=account.get('account_name'),attempt_count=len(attempts))
+            value['diagnosis'] = diagnosis(value)
             items.append(value)
         return {'total':total,'items':items}
 
