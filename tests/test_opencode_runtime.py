@@ -191,6 +191,7 @@ class RuntimeAPI(unittest.IsolatedAsyncioTestCase):
         buddy = create_buddy(root=self.temp.name+'/management',auth_dir=self.temp.name+'/auth',
             initial_key='synthetic-client',admin_key='synthetic-long-admin-key',secure_cookie=False)
         self.app = create_app(native=Native(),buddy=buddy)
+        self.app.state.opencode_runtime.backend = 'runtime'
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app),base_url='http://test')
 
     async def asyncTearDown(self):
@@ -249,3 +250,25 @@ class RuntimeAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(calls[0].url.path,'/v1/messages')
         self.assertEqual(json.loads(calls[0].content)['model'],'big-pickle')
+
+    async def test_zen_backend_supports_public_responses_without_child_process(self):
+        runtime = self.app.state.opencode_runtime
+        runtime.backend = 'zen'
+        login = await self.client.post('/admin/api/login',json={'key':'synthetic-long-admin-key'})
+        await self.client.post('/admin/api/unified/connections',headers={'X-CSRF-Token':login.json()['csrf']},
+            json={'id':'opencode-runtime','name':'OpenCode2API','kind':'opencode_runtime','models':['glm-5.3-flash-free']})
+        def upstream(request):
+            if request.method == 'GET':
+                return httpx.Response(200,json={'data':[{'id':'glm-5.3-flash-free'},{'id':'jev-1.13-free'}]})
+            self.assertTrue(json.loads(request.content)['stream'])
+            return httpx.Response(200,text='data: '+json.dumps({'choices':[{'delta':{'content':'synthetic'},'finish_reason':None}]})+'\n\n'+
+                'data: '+json.dumps({'choices':[{'delta':{},'finish_reason':'stop'}]})+'\n\ndata: [DONE]\n\n')
+        self.app.state.connections.transport = httpx.MockTransport(upstream)
+        with patch.object(runtime,'launch') as launch:
+            response = await self.client.post('/v1/responses',headers={'Authorization':'Bearer synthetic-client'},
+                json={'model':'opencode-runtime/glm-5.3-flash-free','input':'synthetic','stream':False})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['object'],'response')
+        self.assertEqual(response.json()['status'],'completed')
+        launch.assert_not_called()
+        self.assertEqual(runtime.status()['backend'],'zen')

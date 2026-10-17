@@ -167,6 +167,9 @@ class Connections(CustomPool):
         old = self.get(body["existing_id"]) if body.get("existing_id") else None
         row = self.validate(body, old)
         if row['kind'] == 'opencode_runtime':
+            if getattr(self.runtime,'backend','runtime') == 'zen':
+                self.runtime.zen.transport = self.transport
+                return {'models':await self.runtime.zen.models()}
             row = {**row, 'key':self.runtime.token}
         try:
             async with self.relay_client(row["kind"]) as client:
@@ -244,6 +247,9 @@ class Connections(CustomPool):
         started = False
         extra, session_context = self.opencode.prepare(row['id'], scope, body) if row.get('opencode_support') else ({}, None)
         if row.get('kind')=='opencode_runtime':
+            if getattr(self.runtime,'backend','runtime') == 'zen':
+                self.runtime.zen.transport = self.transport
+                return await self.runtime.zen.relay(row['id'],path,body,scope,receive,send)
             row = {**row, 'base_url':self.runtime.base_url, 'key':self.runtime.token}
         try:
             async with self.relay_client(row.get("kind", "openai")) as client:

@@ -19,7 +19,7 @@ from admin.server import write_json
 class OpenCodeRuntime:
     base_url = 'http://127.0.0.1:8789/v1'
 
-    def __init__(self, root, source=None):
+    def __init__(self, root, source=None, backend='runtime'):
         self.root = Path(root).resolve()
         self.source = source or Path(__file__).resolve().parent.parent / 'vendor/opencode2api'
         self.token = secrets.token_urlsafe(36)
@@ -27,6 +27,9 @@ class OpenCodeRuntime:
         self.process = None
         self.lock = asyncio.Lock()
         self.outbound = None
+        if backend not in {'runtime','zen'}: raise ValueError('Invalid OpenCode backend')
+        self.backend = backend
+        self.zen = None
         self.active = 0
         self.applied_key = ''
         self.credentials_path = self.root.with_name(self.root.name + '-credentials.enc.json')
@@ -38,6 +41,9 @@ class OpenCodeRuntime:
             doc = json.loads(self.credentials_path.read_text(encoding='utf-8'))
             self.official_key = AESGCM(self.credentials_key.read_bytes()).decrypt(
                 base64.b64decode(doc['nonce']), base64.b64decode(doc['data']), b'unified2api-opencode-key-v1').decode()
+        if backend == 'zen':
+            from .zen_direct import ZenDirect
+            self.zen = ZenDirect(self)
 
     async def configure(self, body):
         if not isinstance(body, dict) or set(body) != {'api_key'}:
@@ -76,6 +82,9 @@ class OpenCodeRuntime:
 
 
     def status(self):
+        if self.backend == 'zen':
+            return {'available':True,'running':False,'backend':'zen','version':'zen-python-1',
+                'opencode_version':None,'key_configured':bool(self.official_key),'key_pending':False,'message':''}
         available = bool(shutil.which('node') and shutil.which('opencode') and
                          (self.source / 'node_modules/express/package.json').is_file())
         return {'available':available, 'running':bool(self.process and self.process.poll() is None),
@@ -136,6 +145,7 @@ class OpenCodeRuntime:
             await self._ensure_locked()
 
     async def _ensure_locked(self):
+        if self.backend == 'zen': return
         if self.process and self.applied_key != self.official_key and not self.active:
             await asyncio.to_thread(self.stop)
         if not self.status()['available']:
@@ -181,3 +191,7 @@ class OpenCodeRuntime:
 
     async def close(self):
         await asyncio.to_thread(self.stop)
+        if self.zen:
+            self.zen.history.clear()
+            self.zen.history_bytes = 0
+            self.zen.sessions.clear()

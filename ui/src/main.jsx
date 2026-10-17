@@ -679,7 +679,7 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
         <label>服务类型</label>
         <select value={form.kind} onChange={(e) => changeKind(e.target.value)} disabled={Boolean(initialConnection)}>
           <option value="openai">通用 OpenAI 接口</option>
-          <option value="opencode_runtime">OpenCode2API · 内置运行时</option>
+          <option value="opencode_runtime">OpenCode Zen · 轻量直连</option>
           {initialConnection?.kind === 'workbuddy_intl' && <option value="workbuddy_intl">旧版 WorkBuddy 中转</option>}
         </select>
         <div className="field-grid">
@@ -712,7 +712,7 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
         )}
         {isRuntime ? (
           <>
-            <p className="field-help" role="note">使用容器内的 OpenCode 运行时，无需填写地址。可选配置官网 Key，或直接读取免 Key 模型，首次启动可能需要稍候。</p>
+            <p className="field-help" role="note">默认轻量直连 OpenCode，无需填写地址或运行客户端。可选配置官网 Key，或直接读取免 Key 模型。</p>
             <OpenCodeRuntimeKey csrf={csrf} />
           </>
         ) : <>
@@ -742,7 +742,7 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
           placeholder="model-name"
         />
         <button className="button secondary wide" type="button" onClick={discover} disabled={busy}>
-          {busy ? '处理中…' : isRuntime ? '启动并读取模型列表' : '读取模型列表'}
+          {busy ? '处理中…' : '读取模型列表'}
         </button>
         {!isRuntime && <label className="switch-row">
           <span>
@@ -1237,7 +1237,7 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
             <td>
               <strong>{item.name}</strong>
               <small>
-                {item.kind === 'opencode_runtime' ? '内置 OpenCode2API' : item.opencode_support ? 'OpenCode · ' : ''}
+                {item.kind === 'opencode_runtime' ? 'OpenCode Zen' : item.opencode_support ? 'OpenCode · ' : ''}
                 {item.kind === 'workbuddy_intl' ? 'WorkBuddy AI 国际站 · ' : ''}
                 {item.kind !== 'opencode_runtime' && item.base_url}
               </small>

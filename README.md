@@ -67,17 +67,17 @@
 
 ### 自定义服务账号池
 
-#### OpenCode2API 内置运行时
+#### OpenCode Zen 轻量直连
 
-在「自定义服务 → 添加服务」中选择 **OpenCode2API · 内置运行时**，点击「启动并读取模型列表」，选择或保留需要的模型后保存。无需填写 Base URL；不填官网 Key 可使用已开放的免 Key 模型。默认前缀是 `opencode-runtime/`，例如 `opencode-runtime/big-pickle`。已有 OpenCode 直连服务保持独立。
+在「自定义服务 → 添加服务」中选择 **OpenCode Zen · 轻量直连**，点击「读取模型列表」后保存。无需填写 Base URL；不填官网 Key 可使用已开放的免 Key 模型。既有 `opencode-runtime/` 模型前缀保持兼容，例如 `opencode-runtime/glm-5.3-flash-free`。
 
-支持可选的 **OpenCode 官网 API Key**：在添加或编辑服务窗口中填写后，点击「保存官网 Key」，再读取模型列表。所有内置 OpenCode2API 服务共用这份凭据；可替换或清除，清除后恢复免 Key 模式。Key 使用 AES-GCM 加密保存，管理接口仅返回是否配置，不返回原文。更新会等待当前调用结束，再于后续请求应用，无需重启整个服务。填入 Key 不代表所有模型免费，新增模型的费用和权限以官网为准。使用专用 System One 接口的模型暂不接入普通聊天协议。
+可选填写 **OpenCode 官网 API Key** 并点击「保存官网 Key」，再读取模型列表。所有内置 OpenCode 服务共用这份凭据；可替换或清除，清除后恢复免 Key 模式。Key 使用 AES-GCM 加密保存，管理接口仅返回是否配置，不返回原文。直连模式的更新对后续请求生效，不中断已有流。填入 Key 不代表所有模型免费，费用和权限以官网为准。仅对接 Chat 上游模型；原生 Responses、Anthropic 和 System One 专用模型可通过普通自定义服务接入。
 
-集成 [TiaraBasori/OpenCode2API](https://github.com/TiaraBasori/OpenCode2API) 2.5.0（固定源代码版本见 `vendor/opencode2api/UPSTREAM.md`），在同一个 Docker 容器中按需启动 OpenCode 1.19.0 和 Node 转换进程，Python 仍负责统一鉴权、路由、用量统计和管理。支持 Chat Completions、转换后的 Responses（含 `previous_response_id` 续接）及 Messages；不支持 Codex 原生远程压缩。
+默认使用参考 [12errh/zen-proxy](https://github.com/12errh/zen-proxy) 的 Python 直连适配，无须启动 Node 或 OpenCode 子进程。上游统一使用流式请求，由现有 Python 转换层提供 Chat Completions、Responses（含 `previous_response_id` 续接）和 Messages 的流式／非流式响应；不支持 Codex 原生远程压缩。指定模型失败会回显真实错误，不自动替换成其他模型。
 
-运行时仅监听容器内回环地址，使用独立用户、随机内部凭据和隔离的 Home／工作目录，不继承中转密钥或其他客户端配置。内置工具由上游插件禁用；客户端传入的工具调用返回客户端执行。运行时会保存自己的会话以支持续接，默认清理超过一小时的会话；服务重启后旧 Responses 续接 ID 不再有效。数据位于 `buddy-data` 卷的 `/data/opencode-runtime`，与其他平台账号目录分开。启用后首次调用会启动运行时，随网关退出；全局代理在运行时启动时应用，更改代理后需要重启服务。
+适配器补充会话头和上游工具定义，所有工具调用均由客户端执行，服务器不执行内置文件或命令工具。收到客户端未声明的工具时返回明确错误，不静默丢弃。Responses 续接按 API Key、服务和模型隔离，内存缓存最多 256 条／16 MiB，有效期一小时，服务重启后失效。全局代理在每次新请求时应用。
 
-模型目录与免费活动随上游调整，能否调用以实际响应为准；本项目不把上游的“无限量”宣传作为额度保证。此适配器返回的 Token 用量为文本长度估算值。直接调用官网接口的「启用 OpenCode 支持」开关仅负责会话头兼容，与此运行时接入方式分别配置。
+原 [TiaraBasori/OpenCode2API](https://github.com/TiaraBasori/OpenCode2API) 2.5.0 与 OpenCode 1.19.0 运行时保留，可设置 `OPENCODE_BACKEND=runtime` 后重启服务切回，默认值为 `zen`。模型目录、地区限制与免费活动随上游调整，能否调用以真实推理响应为准，不把目录可见或 HTTP 健康检查当作模型调用成功。直连模式优先保留上游返回的 Token 用量。普通自定义服务的「启用 OpenCode 支持」开关仅负责会话头兼容，与此方式分别配置。
 
 #### 通用服务
 

@@ -316,7 +316,8 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     connections = Connections(store.root / "connections.json")
     connections.outbound = outbound
     from .opencode_runtime import OpenCodeRuntime
-    opencode_runtime = OpenCodeRuntime(Path(os.environ.get('OPENCODE_RUNTIME_DATA_DIR', str(store.root.parent/'opencode-runtime'))))
+    opencode_runtime = OpenCodeRuntime(Path(os.environ.get('OPENCODE_RUNTIME_DATA_DIR', str(store.root.parent/'opencode-runtime'))),
+        backend=os.environ.get('OPENCODE_BACKEND','zen'))
     opencode_runtime.outbound = outbound
     connections.runtime = opencode_runtime
     qoder_accounts = QoderAccounts(store, transport=qoder_transport)

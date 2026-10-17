@@ -35,6 +35,7 @@ COPY vendor/workbuddy2api-hub ./vendor/workbuddy2api-hub
 COPY vendor/qoder2api-hub ./vendor/qoder2api-hub
 COPY --from=qoder-umid /build/umid ./vendor/qoder2api-hub/umid
 COPY unified ./unified
+COPY vendor/zen-proxy ./vendor/zen-proxy
 COPY --from=native /libtrae.so ./libtrae.so
 RUN ln -s /opt/opencode/bin/opencode /usr/local/bin/opencode
 ARG UNIFIED_RELEASE_REVISION=dev
