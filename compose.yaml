@@ -17,6 +17,7 @@ services:
       CODEBUDDY2OPENAI_KEY: ${UNIFIED_API_KEY:?Set UNIFIED_API_KEY}
       CODEBUDDY_AUTH_DIR: /data/auth
       MANAGEMENT_DATA_DIR: /data/management
+      OPENCODE_RUNTIME_DATA_DIR: /data/opencode-runtime
       TW2A_API_KEY: ${UNIFIED_API_KEY:?Set UNIFIED_API_KEY}
       TW2A_AUTH_DIR: /app/auths
       TW2A_STATE_FILE: /app/trae-data/state.json

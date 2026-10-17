@@ -67,6 +67,18 @@
 
 ### 自定义服务账号池
 
+#### OpenCode2API 内置运行时
+
+在「自定义服务 → 添加服务」中选择 **OpenCode2API · 内置运行时**，点击「启动并读取模型列表」，选择或保留需要的模型后保存。无需填写 Base URL 或上游 Key，默认前缀是 `opencode-runtime/`，例如 `opencode-runtime/big-pickle`。已有 OpenCode 直连服务保持独立。
+
+集成 [TiaraBasori/OpenCode2API](https://github.com/TiaraBasori/OpenCode2API) 2.5.0（固定源代码版本见 `vendor/opencode2api/UPSTREAM.md`），在同一个 Docker 容器中按需启动 OpenCode 1.19.0 和 Node 转换进程，Python 仍负责统一鉴权、路由、用量统计和管理。支持 Chat Completions、转换后的 Responses（含 `previous_response_id` 续接）及 Messages；不支持 Codex 原生远程压缩。
+
+运行时仅监听容器内回环地址，使用独立用户、随机内部凭据和隔离的 Home／工作目录，不继承中转密钥或其他客户端配置。内置工具由上游插件禁用；客户端传入的工具调用返回客户端执行。运行时会保存自己的会话以支持续接，默认清理超过一小时的会话；服务重启后旧 Responses 续接 ID 不再有效。数据位于 `buddy-data` 卷的 `/data/opencode-runtime`，与其他平台账号目录分开。启用后首次调用会启动运行时，随网关退出；全局代理在运行时启动时应用，更改代理后需要重启服务。
+
+模型目录与免费活动随上游调整，能否调用以实际响应为准；本项目不把上游的“无限量”宣传作为额度保证。此适配器返回的 Token 用量为文本长度估算值。直接调用官网接口的「启用 OpenCode 支持」开关仅负责会话头兼容，与此运行时接入方式分别配置。
+
+#### 通用服务
+
 每个服务可添加多个 Key，保持现有 `服务前缀/模型名` 不变。点击服务行的「账号池」添加、编辑、停用或删除账号，设置账号并发；请求按账号轮换，失败账号冷却 60 秒后重新参与。
 
 余额查询支持 DeepSeek、NewAPI 和 Sub2API。DeepSeek 与 Sub2API 使用账号 Key；NewAPI 需要独立的控制台 Access Token，可配置用户 ID。查询失败保留上次余额，界面标明更新时间和上游单位，不把原始 quota 强行换算为金额。

@@ -315,6 +315,10 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     converter.UNIFIED_OUTBOUND_PROXY = outbound.resolve
     connections = Connections(store.root / "connections.json")
     connections.outbound = outbound
+    from .opencode_runtime import OpenCodeRuntime
+    opencode_runtime = OpenCodeRuntime(Path(os.environ.get('OPENCODE_RUNTIME_DATA_DIR', str(store.root.parent/'opencode-runtime'))))
+    opencode_runtime.outbound = outbound
+    connections.runtime = opencode_runtime
     qoder_accounts = QoderAccounts(store, transport=qoder_transport)
     if hasattr(qoder_accounts.transport, 'client'):
         qoder_accounts.transport.outbound = outbound
@@ -381,13 +385,14 @@ def create_app(native=None, buddy=None, qoder_transport=None):
                 await asyncio.gather(automation_task, probe_task, credit_task, qoder_refresh_task, antigravity_refresh_task, *([probes.task] if probes.task else []), return_exceptions=True)
                 await antigravity.close()
                 await qoder_accounts.close()
+                await opencode_runtime.close()
                 native.close()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(AdminMiddleware)
     register_proxies(app, store, outbound, body_json)
     controls = KeyControls(unified_config,request_log.path)
-    capabilities = ModelCapabilities(unified_config)
+    capabilities = ModelCapabilities(unified_config,connections)
     releases = ReleaseManager(store.root / "releases")
     api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts,controls,capabilities,antigravity)
     from .antigravity_admin import register as register_antigravity
@@ -755,6 +760,11 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         store.require_admin(req)
         return await connections.discover(await body_json(req))
 
+    @app.get('/admin/api/unified/opencode-runtime')
+    async def opencode_runtime_status(req: Request):
+        store.require_admin(req)
+        return opencode_runtime.status()
+
     @app.post("/admin/api/unified/connections")
     async def add_connection(req: Request):
         store.require_admin(req)
@@ -933,6 +943,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     result.state = app.state
     result.state.buddy, result.state.native = buddy, native
     result.state.connections = connections
+    result.state.opencode_runtime = opencode_runtime
     result.state.monkey_login = monkey_login
     result.state.workbuddy_login = workbuddy_login
     result.state.qoder_accounts = qoder_accounts

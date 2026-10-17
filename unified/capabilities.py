@@ -10,9 +10,15 @@ FIELDS = {'vision','tools','compact','context_window','max_output_tokens','reaso
 
 
 class ModelCapabilities:
-    def __init__(self,config):
+    def __init__(self,config,connections=None):
         self.config = config
+        self.connections = connections
         self.lock = asyncio.Lock()
+
+    def is_runtime(self,row):
+        prefix = row['id'].partition('/')[0]
+        return row.get('integration') == 'opencode_runtime' or (
+            self.connections is not None and self.connections.data.get(prefix,{}).get('kind') == 'opencode_runtime')
 
     def describe(self,row):
         prefix = row['id'].partition('/')[0]
@@ -23,6 +29,11 @@ class ModelCapabilities:
                      'messages':'converted' if converted else 'unsupported'}
         result = {'vision':None,'tools':None,'context_window':None,'compact':False if converted or chat_only else None,
                   'protocols':protocols,'sources':{'protocols':'gateway','compact':'gateway' if converted or chat_only else 'unknown'}}
+        runtime = self.is_runtime(row)
+        if runtime:
+            result.update(compact=False, tools=None,
+                protocols={'chat':'supported','responses':'converted','messages':'converted'})
+            result['sources'].update(protocols='gateway',compact='gateway')
         for field in ('vision','tools','reasoning'):
             if type(row.get(field)) is bool:
                 result[field] = row[field]
@@ -42,6 +53,9 @@ class ModelCapabilities:
                     result['sources'][field] = source
             if saved.get('checked_at'):
                 result['checked_at'] = saved['checked_at']
+        if runtime:
+            result.update(compact=False, protocols={'chat':'supported','responses':'converted','messages':'converted'})
+            result['sources'].update(protocols='gateway',compact='gateway')
         return result
 
     def save(self,model,body):
@@ -64,7 +78,7 @@ class ModelCapabilities:
             raise HTTPException(400,'协议能力格式不正确')
         if protocols.get('messages','unsupported')!='unsupported':
             raise HTTPException(400,'此接口不支持手动开启原生 Messages')
-        if model.partition('/')[0] in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn'}:
+        if model.partition('/')[0] in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn'} or self.is_runtime({'id':model}):
             expected = self.describe({'id':model})['protocols']
             if any(protocols.get(key,expected[key])!=expected[key] for key in protocols) or body.get('compact') is True:
                 raise HTTPException(400,'内置平台的协议由适配器决定，不能用标签开启未实现的原生协议或压缩')
@@ -122,7 +136,7 @@ class ModelCapabilities:
                             detected['tools'] = True
             # Conversion is known from the installed adapter. A 200 is insufficient
             # to claim native Responses or real compaction.
-            if row['id'].partition('/')[0] not in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn','antigravity','route'}:
+            if not self.is_runtime(row) and row['id'].partition('/')[0] not in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn','antigravity','route'}:
                 status,value = await runner('/v1/responses',{'model':row['id'],'input':marker,'stream':False,'max_output_tokens':16})
                 native = status==200 and isinstance(value,dict) and value.get('object')=='response' and value.get('status')=='completed' and isinstance(value.get('output'),list)
                 if native:

@@ -42,6 +42,8 @@ class CustomPool:
             raise HTTPException(400, '账号包含不支持的字段')
         with self.lock:
             row = self.get(cid)
+            if row.get('kind') == 'opencode_runtime':
+                raise HTTPException(400, '内置 OpenCode2API 由运行时管理凭据，无需添加账号 Key')
             accounts = self.ensure_accounts(row)
             old = next((a for a in accounts if a['id'] == aid), None) if aid else None
             if aid and old is None:

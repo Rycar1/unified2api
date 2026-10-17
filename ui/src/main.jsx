@@ -583,6 +583,13 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const isRuntime = form.kind === 'opencode_runtime'
+  function changeKind(kind) {
+    setForm((current) => ({ ...current, kind,
+      ...(kind === 'opencode_runtime' ? {name:current.name || 'OpenCode2API', id:current.id || 'opencode-runtime',
+        base_url:'', key:'', models:'', opencode_support:false} : {base_url:'',key:''}),
+    }))
+  }
   const body = () => ({
     name: form.name.trim(),
     id: form.id.trim(),
@@ -631,8 +638,9 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
     <Modal title={initialConnection ? '编辑服务' : '添加服务'} subtitle="OpenAI 兼容接口" onClose={onClose}>
       <form onSubmit={save}>
         <label>服务类型</label>
-        <select value={form.kind} onChange={(e) => update('kind', e.target.value)}>
+        <select value={form.kind} onChange={(e) => changeKind(e.target.value)} disabled={Boolean(initialConnection)}>
           <option value="openai">通用 OpenAI 接口</option>
+          <option value="opencode_runtime">OpenCode2API · 内置运行时</option>
           {initialConnection?.kind === 'workbuddy_intl' && <option value="workbuddy_intl">旧版 WorkBuddy 中转</option>}
         </select>
         <div className="field-grid">
@@ -663,6 +671,9 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
             模型前缀保持不变，现有客户端仍可使用 <code>{form.id}/</code>。
           </p>
         )}
+        {isRuntime ? (
+          <p className="field-help" role="note">使用容器内的 OpenCode 运行时，无需填写地址或 Key。点击「读取模型列表」启动并获取目录，首次启动可能需要稍候。</p>
+        ) : <>
         <label>Base URL</label>
         <input
           type="url"
@@ -680,6 +691,7 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
           autoComplete="new-password"
           placeholder={initialConnection ? '留空则保持当前 Key' : '服务商提供的 Key'}
         />
+        </>}
         <label>模型名称（每行一个）</label>
         <textarea
           rows="5"
@@ -688,15 +700,15 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
           placeholder="model-name"
         />
         <button className="button secondary wide" type="button" onClick={discover} disabled={busy}>
-          读取模型列表
+          {busy ? '处理中…' : isRuntime ? '启动并读取模型列表' : '读取模型列表'}
         </button>
-        <label className="switch-row">
+        {!isRuntime && <label className="switch-row">
           <span>
             <strong>启用 OpenCode 支持</strong>
             <small>保留会话信息和客户端标识，缺少时自动补充，仅作用于此服务</small>
           </span>
           <input type="checkbox" checked={form.opencode_support} onChange={(e) => update('opencode_support', e.target.checked)} />
-        </label>
+        </label>}
         <label className="switch-row">
           <span>
             <strong>启用服务</strong>
@@ -1183,9 +1195,9 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
             <td>
               <strong>{item.name}</strong>
               <small>
-                {item.opencode_support ? 'OpenCode · ' : ''}
+                {item.kind === 'opencode_runtime' ? '内置 OpenCode2API' : item.opencode_support ? 'OpenCode · ' : ''}
                 {item.kind === 'workbuddy_intl' ? 'WorkBuddy AI 国际站 · ' : ''}
-                {item.base_url}
+                {item.kind !== 'opencode_runtime' && item.base_url}
               </small>
             </td>
             <td>
@@ -1196,7 +1208,7 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
             </td>
             <td className="tabular">{item.models?.length || 0}</td>
             <td className="row-menu">
-              <button className="button secondary pool-open" onClick={() => setPool(item)}>账号池 · {item.accounts?.length || 1}</button>
+              {item.kind !== 'opencode_runtime' && <button className="button secondary pool-open" onClick={() => setPool(item)}>账号池 · {item.accounts?.length || 1}</button>}
               <ConnectionRowActions
                 connection={item}
                 csrf={csrf}

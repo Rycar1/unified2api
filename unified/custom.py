@@ -76,6 +76,11 @@ class Connections(CustomPool):
                 if field in {"key", "balance_key"} and old and body[field] == "":
                     continue
                 row[field] = body[field]
+        if row.get('kind') == 'opencode_runtime':
+            row.update(base_url='http://127.0.0.1:8789/v1', key='managed-opencode-runtime',
+                       adapter='relay', opencode_support=False, balance_scheme='none', balance_key='', balance_user_id='')
+            row['accounts'] = [{'id':'primary','name':'内置运行时','key':'managed-opencode-runtime',
+                                'enabled':True,'max_concurrency':2}]
         cid = row.get("id", "")
         if not isinstance(cid, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", cid) or cid in {"trae", "codebuddy", "monkeycode", "workbuddy", "qoder", "qoder-cn", "antigravity"}:
             raise HTTPException(400, "服务标识须为小写英文开头的 1–40 位字母、数字、下划线或短横线，不能使用内置平台名称")
@@ -99,8 +104,12 @@ class Connections(CustomPool):
         if not isinstance(models, list) or len(models) > 2000 or any(not isinstance(m, str) or not m.strip() or len(m) > 256 or any(ord(c) < 32 for c in m) for m in models):
             raise HTTPException(400, "模型列表格式无效")
         row["models"] = list(dict.fromkeys(m.strip() for m in models))
+        if row.get('kind') == 'opencode_runtime':
+            row['models'] = list(dict.fromkeys(m.removeprefix('opencode/') for m in row['models']))
+            if any('/' in m or not m for m in row['models']):
+                raise HTTPException(400, '内置 OpenCode2API 仅接入 OpenCode 模型，请填写模型名或读取目录')
         row.setdefault("kind", "openai")
-        if not isinstance(row["kind"], str) or row["kind"] not in {"openai", "workbuddy_intl"}:
+        if not isinstance(row["kind"], str) or row["kind"] not in {"openai", "workbuddy_intl", "opencode_runtime"}:
             raise HTTPException(400, "不支持的服务类型")
         row.setdefault("adapter", "relay")
         if row["adapter"] not in {"relay", "hub"} or (row["adapter"] == "hub" and row["kind"] != "workbuddy_intl"):
@@ -117,7 +126,7 @@ class Connections(CustomPool):
             if not isinstance(row.get(field, ''), str) or len(row.get(field, '')) > 8192 or any(c in row.get(field, '') for c in '\r\n\0'):
                 raise HTTPException(400, '余额查询凭据格式无效')
         self.ensure_accounts(row)
-        if body.get('key'):
+        if body.get('key') and row['kind'] != 'opencode_runtime':
             row['accounts'][0]['key'] = row['key']
             row['accounts'][0].pop('balance', None)
         if old and any(row.get(k) != old.get(k) for k in ('base_url', 'balance_scheme', 'balance_key', 'balance_user_id')):
@@ -150,10 +159,14 @@ class Connections(CustomPool):
     async def discover(self, body):
         old = self.get(body["existing_id"]) if body.get("existing_id") else None
         row = self.validate(body, old)
+        if row['kind'] == 'opencode_runtime':
+            await self.runtime.ensure()
+            row = {**row, 'key':self.runtime.token}
         try:
-            async with self.client(row["kind"]) as client:
+            async with self.relay_client(row["kind"]) as client:
                 async with client.stream("GET", row["base_url"] + "/models", headers={"Authorization": "Bearer " + row["key"],
-                                          **({"X-Realm": "intl"} if row.get("adapter") == "hub" else {})}, timeout=30) as response:
+                                          **({"X-Realm": "intl"} if row.get("adapter") == "hub" else {})},
+                                         timeout=120 if row['kind']=='opencode_runtime' else 30) as response:
                     if response.status_code != 200:
                         detail = await _bounded_body(response)
                         raise HTTPException(502, "模型列表读取失败：" + safe_error_message(detail, response.status_code, (row["key"],)))
@@ -175,6 +188,8 @@ class Connections(CustomPool):
                         raise HTTPException(502, "中转未返回国际站模型；请检查 WorkBuddy AI 已登录，并将中转站点设为 intl 或 both")
                 else:
                     models = [m["id"] for m in data["data"] if isinstance(m, dict) and isinstance(m.get("id"), str)]
+                if row['kind'] == 'opencode_runtime':
+                    models = [m.removeprefix('opencode/') for m in models if m.startswith('opencode/') or '/' not in m]
                 row["models"] = models
                 return {"models": self.validate(row)["models"]}
         except httpx.HTTPError as exc:
@@ -184,7 +199,15 @@ class Connections(CustomPool):
 
     def models(self):
         return [{"id": row["id"] + "/" + model, "object": "model", "owned_by": row["id"],
-                 "provider_name": row["name"]} for row in self.rows() if row["enabled"] for model in row["models"]]
+                 "provider_name": row["name"],
+                 **({'integration':'opencode_runtime'} if row['kind']=='opencode_runtime' else {})}
+                for row in self.rows() if row["enabled"] for model in row["models"]]
+
+    def relay_client(self, kind):
+        if kind == 'opencode_runtime':
+            return httpx.AsyncClient(transport=self.transport, trust_env=False,
+                timeout=httpx.Timeout(None, read=900, connect=10))
+        return self.client(kind)
 
     async def relay(self, cid, path, body, scope, receive, send):
         return await self.pooled_relay(cid, path, body, scope, receive, send)
@@ -193,6 +216,10 @@ class Connections(CustomPool):
         if not row["enabled"]:
             raise HTTPException(503, "自定义服务已暂停")
         accepted={"/v1/chat/completions", "/v1/responses", "/v1/responses/compact"}
+        if row.get('kind')=='opencode_runtime':
+            if path=='/v1/responses/compact':
+                raise HTTPException(400, 'OpenCode2API 提供 Responses 格式转换，不支持原生远程压缩')
+            accepted.add('/v1/messages')
         if row.get('adapter')=='hub': accepted.add('/v1/messages')
         if path not in accepted:
             raise HTTPException(400, "自定义服务支持 Chat Completions / Responses，具体以该服务能力为准")
@@ -200,8 +227,11 @@ class Connections(CustomPool):
             raise HTTPException(400, "WorkBuddy AI 中转仅支持 Chat Completions")
         started = False
         extra, session_context = self.opencode.prepare(row['id'], scope, body) if row.get('opencode_support') else ({}, None)
+        if row.get('kind')=='opencode_runtime':
+            await self.runtime.ensure()
+            row = {**row, 'base_url':self.runtime.base_url, 'key':self.runtime.token}
         try:
-            async with self.client(row.get("kind", "openai")) as client:
+            async with self.relay_client(row.get("kind", "openai")) as client:
                 async with client.stream("POST", row["base_url"] + path.removeprefix("/v1"), content=body,
                         headers={"Authorization": "Bearer " + row["key"], "Content-Type": "application/json",
                                  **extra,
