@@ -36,6 +36,7 @@ COPY vendor/qoder2api-hub ./vendor/qoder2api-hub
 COPY --from=qoder-umid /build/umid ./vendor/qoder2api-hub/umid
 COPY unified ./unified
 COPY --from=native /libtrae.so ./libtrae.so
+RUN ln -s /opt/opencode/bin/opencode /usr/local/bin/opencode
 ARG UNIFIED_RELEASE_REVISION=dev
 LABEL io.unified2api.role="gateway" org.opencontainers.image.source="https://github.com/Rycar1/unified2api" org.opencontainers.image.revision="${UNIFIED_RELEASE_REVISION}"
 ENV PYTHONUNBUFFERED=1 WORKBUDDY_EMBEDDED=true WORKBUDDY_HUB_URL=http://127.0.0.1:8788 QD_UMID_DIR=/app/vendor/qoder2api-hub/umid UNIFIED_RELEASE_REVISION=${UNIFIED_RELEASE_REVISION}
