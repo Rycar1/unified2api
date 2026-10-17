@@ -23,6 +23,8 @@ AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 TOKEN_URL = 'https://oauth2.googleapis.com/token'
 PROD = 'https://cloudcode-pa.googleapis.com/v1internal'
 DAILY = 'https://daily-cloudcode-pa.googleapis.com/v1internal'
+CONTENT_ENDPOINTS = (('daily', DAILY),
+    ('sandbox', 'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal'), ('prod', PROD))
 SCOPES = ['openid', *['https://www.googleapis.com/auth/'+s for s in
     ('cloud-platform', 'userinfo.email', 'userinfo.profile', 'cclog', 'experimentsandconfigs')]]
 FALLBACK = ['gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']
@@ -74,6 +76,9 @@ def parse_models(value):
             if type(number) is int and 0 < number <= 10**8: row[target] = number
         if row['reasoning']: row['reasoning_efforts'] = ['minimal','low','medium','high']
         rows.append(row)
+    default = value.get('defaultAgentModelId')
+    if isinstance(default, str):
+        rows.sort(key=lambda row: row['id'] != 'antigravity/'+default)
     return rows[:500]
 
 
@@ -292,8 +297,51 @@ class AntigravityAccounts(QoderRelay):
         trace = CURRENT_TRACE.get()
         return (trace.key_id if trace else '', rid)
 
+    async def generate_frames(self, row, envelope, model):
+        """Try the same model across Google environments, before yielding only."""
+        from .antigravity_protocol import gemini_frames
+        failures = []
+        produced = False
+        async with self.client() as client:
+            for label, base in CONTENT_ENDPOINTS:
+                try:
+                    for attempt in range(2):
+                        stale_token = row['access_token']
+                        async with client.stream('POST', base+':streamGenerateContent?alt=sse',
+                                headers=self.headers(row), json=envelope) as response:
+                            if response.status_code == 401 and attempt == 0:
+                                await self.ensure_token(row, force=True, stale_token=stale_token)
+                                continue
+                            if response.status_code >= 300:
+                                await response.aread()
+                                try:
+                                    self.failure(response, row)
+                                except HTTPException as exc:
+                                    if (response.status_code not in {404, 429, 500, 502, 503, 504}
+                                            or (response.status_code == 429 and not failures)):
+                                        raise
+                                    failures.append((label, response.status_code, exc))
+                                    break
+                            async for frame in gemini_frames(response.aiter_lines()):
+                                produced = True
+                                yield frame
+                            return
+                except httpx.HTTPError:
+                    if produced:
+                        raise
+                    failures.append((label, 502, HTTPException(502, 'Antigravity 网络连接中断')))
+        # An absent model on one environment must not hide a capacity response
+        # from another. Preserve the requested model; never substitute a newer one.
+        statuses = ' / '.join(f'{label} {status}' for label, status, _ in failures)
+        if any(status == 429 for _, status, _ in failures):
+            raise HTTPException(429, f'Antigravity 模型 {model[:200]} 暂受 Google 额度或容量限制（{statuses}），请稍后重试或选择其他模型')
+        substantive = next((exc for _, status, exc in reversed(failures) if status != 404), None)
+        if substantive:
+            raise substantive
+        raise HTTPException(404, f'Antigravity 模型 {model[:200]} 的服务入口暂不可用（{statuses}）；模型目录列出不代表当前入口可调用，请刷新目录或选择其他模型')
+
     async def chat_chunks(self, chat):
-        from .antigravity_protocol import request_envelope, gemini_frames
+        from .antigravity_protocol import request_envelope
         from .diagnostics import CURRENT_TRACE, note_account
         chat = copy.deepcopy(chat)
         mid = chat['model']
@@ -310,10 +358,14 @@ class AntigravityAccounts(QoderRelay):
                     if affinity and affinity != record[1]: raise HTTPException(400, '工具调用来自不同的 Antigravity 账号，请开始新会话')
                     affinity = record[1]
                     if record[2]: call['extra_content'] = {'google': {'thought_signature': record[2]}}
-        candidates = [r for r in self.rows if r['enabled'] and not r.get('invalid')
-            and r.get('model_cooldowns',{}).get(mid,0)<=now
+        eligible = [r for r in self.rows if r['enabled'] and not r.get('invalid')
             and (not r.get('models') or any(m['id']=='antigravity/'+mid for m in r['models']))
             and (not affinity or r['id']==affinity)]
+        candidates = [r for r in eligible if r.get('model_cooldowns',{}).get(mid,0)<=now]
+        if eligible and not candidates:
+            retry = max(1, int(min(r['model_cooldowns'][mid] for r in eligible)-now)+1)
+            raise HTTPException(429, f'Antigravity 模型 {mid[:200]} 正在限流冷却中，请约 {retry} 秒后重试或选择其他模型',
+                                headers={'Retry-After':str(retry)})
         start = self.cursor % max(1,len(candidates)); self.cursor += 1
         candidates = candidates[start:]+candidates[:start]
         limit = trace.max_account_concurrency if trace else 2
@@ -332,22 +384,14 @@ class AntigravityAccounts(QoderRelay):
                            'gemini-2.5-flash-lite':'gemini-2.5-flash'}
                 wire['model'] = aliases.get(mid, mid+'-tiered' if re.fullmatch(r'gemini-3\.[678]-flash',mid) else mid)
                 envelope = request_envelope(wire, row.get('project_id',''), bool(row.get('email') and not row['email'].endswith(('@gmail.com','@googlemail.com'))))
-                async with self.client() as client:
-                    for attempt in range(2):
-                        stale_token = row['access_token']
-                        async with client.stream('POST', DAILY+':streamGenerateContent?alt=sse', headers=self.headers(row), json=envelope) as response:
-                            if response.status_code == 401 and attempt == 0:
-                                await self.ensure_token(row, force=True, stale_token=stale_token); continue
-                            if response.status_code >= 300:
-                                await response.aread(); self.failure(response,row)
-                            async for frame in gemini_frames(response.aiter_lines()):
-                                for choice in frame.get('choices',[]):
-                                    for call in (choice.get('delta') or {}).get('tool_calls',[]):
-                                        signature=((call.get('extra_content') or {}).get('google') or {}).get('thought_signature')
-                                        self.signatures[(namespace,call['id'])]=(time.time(),aid,signature)
-                                        while len(self.signatures)>2048: self.signatures.popitem(last=False)
-                                emitted = True; yield frame
-                            return
+                async for frame in self.generate_frames(row, envelope, mid):
+                    for choice in frame.get('choices',[]):
+                        for call in (choice.get('delta') or {}).get('tool_calls',[]):
+                            signature=((call.get('extra_content') or {}).get('google') or {}).get('thought_signature')
+                            self.signatures[(namespace,call['id'])]=(time.time(),aid,signature)
+                            while len(self.signatures)>2048: self.signatures.popitem(last=False)
+                    emitted = True; yield frame
+                return
             except httpx.HTTPError:
                 if emitted or index==len(candidates)-1: raise HTTPException(502, 'Antigravity 网络连接中断，请检查出网代理') from None
             except HTTPException as exc:

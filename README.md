@@ -268,6 +268,8 @@ Responses 原生、格式转换与 Codex 远程压缩分别标记。内置平台
 
 账号支持轮换、暂停、删除、刷新和额度查询；额度按各周期的剩余百分比展示，不换算成其他平台的积分。临期自动续期；单账号限额在输出前尝试其他账号，已经开始输出的请求不会重放。工具调用保存 thought signature 并保持原账号，防止多账号轮换破坏工具续接。Antigravity 没有签到活动，因此不显示签到按钮。
 
+模型目录优先展示 Google 当前默认推荐的型号。部分型号虽然仍在目录中，但具体服务环境可能返回 404 或容量限制；中转会在尚未输出时尝试同型号的其他 Google 服务入口，保留实际型号。所有入口均不可用时，错误中会显示入口状态；额度或容量限制、限流冷却会明确返回 429，方便选择其他模型或稍后重试。
+
 模型使用 `antigravity/` 前缀，例如 `antigravity/gemini-3-flash`；实际可用名称以模型页和 `/v1/models` 为准。支持 Chat Completions，以及转换后的 Responses、Messages；工具、思考内容和 Token 用量随响应返回，不提供原生 Responses 压缩。输入图片使用 base64 data URL。缺少上游完成标记会回显流中断错误。
 
 Google 服务需要可用的出网网络；后端默认读取系统代理环境变量，也可配置 `ANTIGRAVITY_PROXY=http://proxy-host:port`。Docker 中的 `localhost` 指容器自身，宿主机代理可使用 `host.docker.internal` 或实际代理地址。首次使用需要在服务端 `.env` 中配置 `ANTIGRAVITY_CLIENT_ID`、`ANTIGRAVITY_CLIENT_SECRET`，使用与 refresh token 匹配的 OAuth 应用参数。仓库不内置这些值；自己的 OAuth 应用也必须具备所需的服务访问权限。
