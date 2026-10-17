@@ -565,6 +565,45 @@ function AccountDialog({ csrf, onClose, onSaved }) {
   )
 }
 
+function OpenCodeRuntimeKey({ csrf }) {
+  const [status, setStatus] = useState(null)
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let mounted = true
+    request('unified/opencode-runtime').then((value) => { if (mounted) setStatus(value) })
+      .catch((err) => { if (mounted) setError(err.message) })
+    return () => { mounted = false }
+  }, [])
+  async function save(value) {
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      const result = await request('unified/opencode-runtime', {method:'PATCH', body:{api_key:value}, csrf})
+      setStatus(result)
+      setKey('')
+      setMessage(result.key_pending ? '已保存，当前调用结束后的下一次请求将应用。' : value ? '官网 Key 已保存，下次请求自动应用。' : '官网 Key 已清除，恢复免 Key 模式。')
+    } catch (err) { setError(err.message) }
+    finally { setBusy(false) }
+  }
+  return <section aria-label="OpenCode 官网凭据">
+    <label htmlFor="opencode-official-key">OpenCode 官网 API Key（可选）</label>
+    <input id="opencode-official-key" type="password" autoComplete="new-password" value={key}
+      onChange={(event) => setKey(event.target.value)} disabled={busy}
+      placeholder={status?.key_configured ? '已配置，输入新 Key 可替换' : '留空使用免 Key 模型'} />
+    <p className="field-help">所有内置 OpenCode2API 服务共用此 Key，加密保存且不会回显。填写 Key 后可能出现付费模型，请按官网价格选择；保存后可重新读取模型列表。</p>
+    <div className="button-row">
+      <button className="button secondary" type="button" onClick={() => save(key.trim())} disabled={busy || !key.trim() || !status}>保存官网 Key</button>
+      <button className="button secondary" type="button" onClick={() => save('')} disabled={busy || !status?.key_configured}>清除官网 Key</button>
+    </div>
+    {message && <p className="field-help" role="status">{message}</p>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </section>
+}
+
 function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
   const [form, setForm] = useState(() =>
     initialConnection
@@ -672,7 +711,10 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
           </p>
         )}
         {isRuntime ? (
-          <p className="field-help" role="note">使用容器内的 OpenCode 运行时，无需填写地址或 Key。点击「读取模型列表」启动并获取目录，首次启动可能需要稍候。</p>
+          <>
+            <p className="field-help" role="note">使用容器内的 OpenCode 运行时，无需填写地址。可选配置官网 Key，或直接读取免 Key 模型，首次启动可能需要稍候。</p>
+            <OpenCodeRuntimeKey csrf={csrf} />
+          </>
         ) : <>
         <label>Base URL</label>
         <input

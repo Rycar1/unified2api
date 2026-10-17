@@ -50,3 +50,7 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+
+# Local OpenCode runtime credential files
+*-credentials.enc.json
+.*-credentials.key

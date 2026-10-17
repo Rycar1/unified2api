@@ -765,6 +765,11 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         store.require_admin(req)
         return opencode_runtime.status()
 
+    @app.patch('/admin/api/unified/opencode-runtime')
+    async def opencode_runtime_configure(req: Request):
+        store.require_admin(req)
+        return await opencode_runtime.configure(await body_json(req))
+
     @app.post("/admin/api/unified/connections")
     async def add_connection(req: Request):
         store.require_admin(req)

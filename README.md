@@ -69,7 +69,9 @@
 
 #### OpenCode2API 内置运行时
 
-在「自定义服务 → 添加服务」中选择 **OpenCode2API · 内置运行时**，点击「启动并读取模型列表」，选择或保留需要的模型后保存。无需填写 Base URL 或上游 Key，默认前缀是 `opencode-runtime/`，例如 `opencode-runtime/big-pickle`。已有 OpenCode 直连服务保持独立。
+在「自定义服务 → 添加服务」中选择 **OpenCode2API · 内置运行时**，点击「启动并读取模型列表」，选择或保留需要的模型后保存。无需填写 Base URL；不填官网 Key 可使用已开放的免 Key 模型。默认前缀是 `opencode-runtime/`，例如 `opencode-runtime/big-pickle`。已有 OpenCode 直连服务保持独立。
+
+支持可选的 **OpenCode 官网 API Key**：在添加或编辑服务窗口中填写后，点击「保存官网 Key」，再读取模型列表。所有内置 OpenCode2API 服务共用这份凭据；可替换或清除，清除后恢复免 Key 模式。Key 使用 AES-GCM 加密保存，管理接口仅返回是否配置，不返回原文。更新会等待当前调用结束，再于后续请求应用，无需重启整个服务。填入 Key 不代表所有模型免费，新增模型的费用和权限以官网为准。使用专用 System One 接口的模型暂不接入普通聊天协议。
 
 集成 [TiaraBasori/OpenCode2API](https://github.com/TiaraBasori/OpenCode2API) 2.5.0（固定源代码版本见 `vendor/opencode2api/UPSTREAM.md`），在同一个 Docker 容器中按需启动 OpenCode 1.19.0 和 Node 转换进程，Python 仍负责统一鉴权、路由、用量统计和管理。支持 Chat Completions、转换后的 Responses（含 `previous_response_id` 续接）及 Messages；不支持 Codex 原生远程压缩。
 

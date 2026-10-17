@@ -157,10 +157,16 @@ class Connections(CustomPool):
         return {"ok": True}
 
     async def discover(self, body):
+        old = self.get(body['existing_id']) if body.get('existing_id') else None
+        if self.validate(body, old)['kind'] == 'opencode_runtime':
+            async with self.runtime.session():
+                return await self._discover(body)
+        return await self._discover(body)
+
+    async def _discover(self, body):
         old = self.get(body["existing_id"]) if body.get("existing_id") else None
         row = self.validate(body, old)
         if row['kind'] == 'opencode_runtime':
-            await self.runtime.ensure()
             row = {**row, 'key':self.runtime.token}
         try:
             async with self.relay_client(row["kind"]) as client:
@@ -169,14 +175,14 @@ class Connections(CustomPool):
                                          timeout=120 if row['kind']=='opencode_runtime' else 30) as response:
                     if response.status_code != 200:
                         detail = await _bounded_body(response)
-                        raise HTTPException(502, "模型列表读取失败：" + safe_error_message(detail, response.status_code, (row["key"],)))
+                        raise HTTPException(502, "模型列表读取失败：" + safe_error_message(detail, response.status_code, (row["key"], *self.runtime_secrets(row))))
                     raw = await _bounded_body(response, 1024 * 1024)
                     try:
                         data = json.loads(raw)
                         if not isinstance(data, dict) or not isinstance(data.get("data"), list):
                             raise ValueError("missing model list")
                     except (ValueError, TypeError):
-                        raise HTTPException(502, "模型列表响应格式无效：" + safe_error_message(raw, response.status_code, (row["key"],))) from None
+                        raise HTTPException(502, "模型列表响应格式无效：" + safe_error_message(raw, response.status_code, (row["key"], *self.runtime_secrets(row)))) from None
                 if row["kind"] == "workbuddy_intl" and row.get("adapter") != "hub":
                     # The relay may expose CN and international catalogues together.
                     # Never silently import the CN models for an international connection.
@@ -193,7 +199,7 @@ class Connections(CustomPool):
                 row["models"] = models
                 return {"models": self.validate(row)["models"]}
         except httpx.HTTPError as exc:
-            raise HTTPException(502, "模型列表读取失败：" + safe_error_message(str(exc) or type(exc).__name__, 502, (row["key"],))) from None
+            raise HTTPException(502, "模型列表读取失败：" + safe_error_message(str(exc) or type(exc).__name__, 502, (row["key"], *self.runtime_secrets(row)))) from None
         except (ValueError, KeyError, TypeError):
             raise HTTPException(502, "无法读取模型列表，请检查地址和 Key，或手动填写模型名")
 
@@ -203,6 +209,11 @@ class Connections(CustomPool):
                  **({'integration':'opencode_runtime'} if row['kind']=='opencode_runtime' else {})}
                 for row in self.rows() if row["enabled"] for model in row["models"]]
 
+    def runtime_secrets(self, row):
+        if row.get('kind') == 'opencode_runtime':
+            return (getattr(self.runtime, 'official_key', ''), getattr(self.runtime, 'applied_key', ''))
+        return ()
+
     def relay_client(self, kind):
         if kind == 'opencode_runtime':
             return httpx.AsyncClient(transport=self.transport, trust_env=False,
@@ -210,6 +221,11 @@ class Connections(CustomPool):
         return self.client(kind)
 
     async def relay(self, cid, path, body, scope, receive, send):
+        row = self.get(cid)
+        if (row.get('kind') == 'opencode_runtime' and row['enabled'] and
+                path in {'/v1/chat/completions', '/v1/responses', '/v1/messages'}):
+            async with self.runtime.session():
+                return await self.pooled_relay(cid, path, body, scope, receive, send)
         return await self.pooled_relay(cid, path, body, scope, receive, send)
 
     async def relay_row(self, row, path, body, scope, receive, send):
@@ -228,7 +244,6 @@ class Connections(CustomPool):
         started = False
         extra, session_context = self.opencode.prepare(row['id'], scope, body) if row.get('opencode_support') else ({}, None)
         if row.get('kind')=='opencode_runtime':
-            await self.runtime.ensure()
             row = {**row, 'base_url':self.runtime.base_url, 'key':self.runtime.token}
         try:
             async with self.relay_client(row.get("kind", "openai")) as client:
@@ -248,7 +263,7 @@ class Connections(CustomPool):
                             except (ValueError,TypeError):
                                 pass
                         raise HTTPException(response.status_code if response.status_code >= 400 else 502,
-                                            safe_error_message(detail, response.status_code, (row["key"],)))
+                                            safe_error_message(detail, response.status_code, (row["key"], *self.runtime_secrets(row))))
                     content_type = response.headers.get("content-type", "application/json")
                     if row.get("adapter")=="hub" and response.headers.get("X-Unified-Account"):
                         from .diagnostics import note_account
@@ -284,4 +299,4 @@ class Connections(CustomPool):
         except httpx.HTTPError as exc:
             if started:
                 raise  # Abort a broken stream; never append a second HTTP response.
-            raise HTTPException(502, "无法连接自定义服务：" + safe_error_message(str(exc) or type(exc).__name__, 502, (row["key"],))) from None
+            raise HTTPException(502, "无法连接自定义服务：" + safe_error_message(str(exc) or type(exc).__name__, 502, (row["key"], *self.runtime_secrets(row)))) from None

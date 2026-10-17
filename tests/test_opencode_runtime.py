@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import os
 import tempfile
@@ -19,6 +20,11 @@ class RuntimeIntegration(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.connections = Connections(Path(self.temp.name) / 'connections.json')
         self.runtime = SimpleNamespace(base_url='http://127.0.0.1:8789/v1', token='private-runtime-token', ensure=AsyncMock())
+        @asynccontextmanager
+        async def session():
+            await self.runtime.ensure()
+            yield
+        self.runtime.session = session
         self.connections.runtime = self.runtime
         self.body = {'id':'opencode-runtime', 'name':'OpenCode2API', 'kind':'opencode_runtime', 'models':['big-pickle']}
 
@@ -108,6 +114,49 @@ class RuntimeIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(env['OPENCODE_PROXY_OMIT_SYSTEM_PROMPT'],'false')
         self.assertEqual(env['HOME'],str(runtime.root/'home'))
 
+    async def test_official_key_is_encrypted_persistent_clearable_and_not_inherited(self):
+        root = Path(self.temp.name)/'runtime'
+        runtime = OpenCodeRuntime(root)
+        secret = 'synthetic-official-zen-key'
+        await runtime.configure({'api_key': secret})
+        self.assertTrue(runtime.status()['key_configured'])
+        self.assertNotIn(secret, json.dumps(runtime.status()))
+        self.assertEqual(runtime.environment()['OPENCODE_ZEN_API_KEY'], secret)
+        for path in root.parent.glob('*credentials*'):
+            self.assertNotIn(secret.encode(), path.read_bytes())
+        restored = OpenCodeRuntime(root)
+        self.assertEqual(restored.environment()['OPENCODE_ZEN_API_KEY'], secret)
+        await restored.configure({'api_key': ''})
+        self.assertNotIn('OPENCODE_ZEN_API_KEY', OpenCodeRuntime(root).environment())
+        for invalid in (None, [], {'api_key': 1}, {'api_key':'bad\nkey'}, {'api_key':'x'*8193}):
+            with self.assertRaises(HTTPException): await restored.configure(invalid)
+
+    async def test_key_change_waits_for_active_session_and_releases_on_error(self):
+        runtime = OpenCodeRuntime(Path(self.temp.name)/'runtime')
+        process = Mock(poll=Mock(return_value=None))
+        runtime.process = process
+        with patch.object(runtime, '_ensure_locked', new=AsyncMock()), patch.object(runtime, 'stop') as stop:
+            with self.assertRaises(ValueError):
+                async with runtime.session():
+                    await runtime.configure({'api_key':'synthetic-next-key'})
+                    self.assertTrue(runtime.status()['key_pending'])
+                    stop.assert_not_called()
+                    raise ValueError('synthetic')
+            self.assertEqual(runtime.active, 0)
+        transport = httpx.MockTransport(lambda request: httpx.Response(200,json={'status':'ok','healthy':True}))
+        client_class = httpx.AsyncClient
+        def stop(): runtime.process = None
+        def launch():
+            runtime.applied_key = runtime.official_key
+            runtime.process = process
+        with patch.object(runtime,'status',return_value={'available':True}), \
+             patch.object(runtime,'stop',side_effect=stop) as stopped, \
+             patch.object(runtime,'launch',side_effect=launch), \
+             patch('unified.opencode_runtime.httpx.AsyncClient',side_effect=lambda **kw:client_class(transport=transport,**kw)):
+            await runtime.ensure()
+        stopped.assert_called_once()
+        self.assertEqual(runtime.applied_key, 'synthetic-next-key')
+
     async def test_missing_runtime_fails_clearly_and_status_contains_no_secret(self):
         runtime = OpenCodeRuntime(Path(self.temp.name)/'runtime')
         with patch('unified.opencode_runtime.shutil.which', return_value=None):
@@ -165,11 +214,29 @@ class RuntimeAPI(unittest.IsolatedAsyncioTestCase):
         row = next(r for r in catalog if r['id']=='opencode-runtime/big-pickle')
         self.assertEqual(row['capabilities']['protocols']['messages'],'converted')
 
+    async def test_key_update_requires_admin_csrf_and_never_returns_secret(self):
+        path = '/admin/api/unified/opencode-runtime'
+        secret = 'synthetic-console-official-key'
+        self.assertEqual((await self.client.patch(path,json={'api_key':secret})).status_code,401)
+        login = await self.client.post('/admin/api/login',json={'key':'synthetic-long-admin-key'})
+        self.assertEqual((await self.client.patch(path,json={'api_key':secret})).status_code,403)
+        headers = {'X-CSRF-Token':login.json()['csrf']}
+        for value, configured in ((secret,True), ('',False)):
+            response = await self.client.patch(path,json={'api_key':value},headers=headers)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json()['key_configured'],configured)
+            self.assertNotIn(secret,response.text)
+            self.assertNotIn(secret,(await self.client.get(path)).text)
+        response = await self.client.patch(path,json={'api_key':secret+'\n'},headers=headers)
+        self.assertEqual(response.status_code,400)
+        self.assertNotIn(secret,response.text)
+
     async def test_public_messages_endpoint_reaches_runtime(self):
         login = await self.client.post('/admin/api/login',json={'key':'synthetic-long-admin-key'})
         await self.client.post('/admin/api/unified/connections',headers={'X-CSRF-Token':login.json()['csrf']},
             json={'id':'opencode-runtime','name':'OpenCode2API','kind':'opencode_runtime','models':['big-pickle']})
         self.app.state.opencode_runtime.ensure = AsyncMock()
+        self.app.state.opencode_runtime._ensure_locked = AsyncMock()
         calls = []
         def upstream(request):
             calls.append(request)
