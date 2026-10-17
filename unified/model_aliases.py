@@ -4,7 +4,7 @@ import re
 from fastapi import HTTPException
 
 MODEL_ID = re.compile(r'^[a-z][a-z0-9_.-]{0,39}/[^\s\x00-\x1f]{1,256}$')
-BUILTINS = {'trae','codebuddy','monkeycode','workbuddy','qoder','qoder-cn','route'}
+BUILTINS = {'trae','codebuddy','monkeycode','workbuddy','qoder','qoder-cn','antigravity','route'}
 
 
 class ModelAliases:

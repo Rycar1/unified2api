@@ -55,6 +55,7 @@ export function platformLabel(account = {}) {
       monkeycode: 'MonkeyCode',
       workbuddy: 'WorkBuddy 国际',
       workbuddy_intl: 'WorkBuddy 国际',
+      antigravity: 'Antigravity',
       qoder_cn: 'Qoder 国内',
       'qoder-cn': 'Qoder 国内',
     }[account.provider] ||

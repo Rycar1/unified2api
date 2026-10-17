@@ -68,12 +68,13 @@ async def body_json(req):
 
 
 class API:
-    def __init__(self, app, buddy, native, connections=None, routes=None, workbuddy=None, qoder=None, controls=None, capabilities=None):
+    def __init__(self, app, buddy, native, connections=None, routes=None, workbuddy=None, qoder=None, controls=None, capabilities=None, antigravity=None):
         self.app, self.buddy, self.native = app, buddy, native
         self.connections = connections
         self.routes = routes
         self.workbuddy = workbuddy
         self.qoder = qoder
+        self.antigravity = antigravity
         self.controls, self.capabilities = controls, capabilities
         self.catalog = []
         self.catalog_by_prefix = {}
@@ -92,6 +93,8 @@ class API:
             row=self.connections.get(prefix)
             rows=[{'id':prefix+'/'+m} for m in row['models']] if row['enabled'] else []
         if prefix=='route' and self.routes: rows=self.routes.public_models()
+        if prefix=='antigravity' and self.antigravity:
+            rows=[m for account in self.antigravity.rows for m in account.get('models',[])] or rows
         if prefix in {'qoder','qoder-cn'} and self.qoder:
             rows = [{'id':m} for m in self.qoder.known_model_ids() if m.startswith(prefix+'/')]
         runtime=getattr(self.workbuddy,'runtime',None)
@@ -114,6 +117,8 @@ class API:
 
         if self.qoder:
             models += await self.qoder.models()
+        if self.antigravity:
+            models += await self.antigravity.models()
         if self.connections:
             models += self.connections.models()
         if self.workbuddy:
@@ -255,6 +260,8 @@ class API:
             providers = {"trae", "codebuddy", "monkeycode", "qoder", "qoder-cn"} | custom_ids
             if self.workbuddy:
                 providers.add("workbuddy")
+            if self.antigravity:
+                providers.add('antigravity')
             if self.routes:
                 providers.add("route")
             if not sep or provider not in providers or not model.strip():
@@ -299,6 +306,8 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     store, pool = buddy.state.store, buddy.state.pool
     connections = Connections(store.root / "connections.json")
     qoder_accounts = QoderAccounts(store, transport=qoder_transport)
+    from .antigravity import AntigravityAccounts
+    antigravity = AntigravityAccounts(store)
     embedded_workbuddy = None
     if os.environ.get("WORKBUDDY_EMBEDDED", "false").lower() == "true":
         embedded_workbuddy = EmbeddedWorkBuddy(os.environ.get("UNIFIED_API_KEY", ""), os.environ.get("ADMIN_KEY", ""),
@@ -345,6 +354,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
             probe_task = asyncio.create_task(probes.loop())
             credit_task = asyncio.create_task(credit_policy.loop(store,workbuddy_login,notify_expiring))
             qoder_refresh_task = asyncio.create_task(qoder_accounts.maintain())
+            antigravity_refresh_task = asyncio.create_task(antigravity.maintain())
             try:
                 yield
             finally:
@@ -353,7 +363,9 @@ def create_app(native=None, buddy=None, qoder_transport=None):
                 credit_task.cancel()
                 if probes.task: probes.task.cancel()
                 qoder_refresh_task.cancel()
-                await asyncio.gather(automation_task, probe_task, credit_task, qoder_refresh_task, *([probes.task] if probes.task else []), return_exceptions=True)
+                antigravity_refresh_task.cancel()
+                await asyncio.gather(automation_task, probe_task, credit_task, qoder_refresh_task, antigravity_refresh_task, *([probes.task] if probes.task else []), return_exceptions=True)
+                await antigravity.close()
                 await qoder_accounts.close()
                 native.close()
 
@@ -362,7 +374,9 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     controls = KeyControls(unified_config,request_log.path)
     capabilities = ModelCapabilities(unified_config)
     releases = ReleaseManager(store.root / "releases")
-    api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts,controls,capabilities)
+    api = API(app, buddy, native, connections, routes, workbuddy_login, qoder_accounts,controls,capabilities,antigravity)
+    from .antigravity_admin import register as register_antigravity
+    register_antigravity(app,antigravity,body_json)
     from .model_aliases import ModelAliases
     api.aliases = ModelAliases(unified_config)
     from .reliability_api import register_aliases
@@ -380,6 +394,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     register_controls(app,body_json,store,api,request_log,controls,capabilities,releases)
     from .task_center import TaskCenter
     task_center=TaskCenter(unified_config,store,pool,qoder_accounts,workbuddy_login,native)
+    task_center.antigravity = antigravity
     task_center.register(app,body_json)
     app.state.task_center=task_center
     from .bulk_import import BulkImport
@@ -408,7 +423,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     @app.get("/healthz")
     @app.get("/health")
     async def health():
-        return {"status": "ok", "mode": "gateway", "providers": ["trae", "codebuddy", "workbuddy", "monkeycode", "qoder", "custom"]}
+        return {"status": "ok", "mode": "gateway", "providers": ["trae", "codebuddy", "workbuddy", "monkeycode", "qoder", "antigravity", "custom"]}
 
     @app.get("/admin/")
     async def home():
@@ -440,6 +455,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
                       "remaining": a["balance"] / 1000, "daily_tokens": a["daily_token_balance"], "last_error": a.get("reason", "")}
                      for a in monkey.get("accounts", [])]
         rows += await qoder_accounts.accounts()
+        rows += await antigravity.accounts()
         try:
             rows += await asyncio.wait_for(workbuddy_login.public_accounts(), 8)
         except (HTTPException, asyncio.TimeoutError):
@@ -548,7 +564,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     async def run_maintenance(action, providers=None, account=None, exclude_accounts=None):
         if providers is not None or account is not None or exclude_accounts is not None:
             from .maintenance import ScopedMaintenance
-            runner = ScopedMaintenance(store, pool, native, qoder_accounts, workbuddy_login, connections, task_center)
+            runner = ScopedMaintenance(store, pool, native, qoder_accounts, workbuddy_login, connections, task_center, antigravity)
             return await runner.run(action, providers, account, exclude_accounts)
         if action=='benefits': return await task_center.run_all_benefits()
         groups = []
@@ -597,6 +613,13 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         except HTTPException as exc:
             qoder_results = [{"ok": False, "message": str(exc.detail)}]
         groups.append({"provider": "qoder", "results": qoder_results})
+        if action != 'checkin':
+            ag_results = []
+            for account in list(antigravity.rows):
+                if not account['enabled']: continue
+                try: ag_results.append({'id': account['id'], **await antigravity.operate(account['id'], 'balance' if action == 'status' else action)})
+                except HTTPException as exc: ag_results.append({'id': account['id'], 'ok': False, 'message': str(exc.detail)})
+            groups.append({'provider': 'antigravity', 'results': ag_results})
         if action == "checkin":
             try:
                 workbuddy_results = await workbuddy_login.daily_active_all()
@@ -707,6 +730,8 @@ def create_app(native=None, buddy=None, qoder_transport=None):
             return await workbuddy_login.operate(aid, "balance")
         elif provider == "qoder":
             return await qoder_accounts.operate(aid, "balance")
+        elif provider == 'antigravity':
+            return await antigravity.operate(aid, 'balance')
         else:
             raise HTTPException(404, "不支持的平台")
 
@@ -896,6 +921,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     result.state.monkey_login = monkey_login
     result.state.workbuddy_login = workbuddy_login
     result.state.qoder_accounts = qoder_accounts
+    result.state.antigravity = antigravity
     result.state.controls, result.state.capabilities, result.state.releases = controls, capabilities, releases
     result.state.api = api
     return result

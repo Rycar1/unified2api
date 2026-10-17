@@ -16,7 +16,7 @@ class ModelCapabilities:
 
     def describe(self,row):
         prefix = row['id'].partition('/')[0]
-        converted = prefix in {'codebuddy','workbuddy','qoder','qoder-cn'}
+        converted = prefix in {'codebuddy','workbuddy','qoder','qoder-cn','antigravity'}
         chat_only = prefix in {'trae','monkeycode'}
         protocols = {'chat':'supported' if converted or chat_only else 'unknown',
                      'responses':'converted' if converted else 'unsupported' if chat_only else 'unknown',
@@ -122,7 +122,7 @@ class ModelCapabilities:
                             detected['tools'] = True
             # Conversion is known from the installed adapter. A 200 is insufficient
             # to claim native Responses or real compaction.
-            if row['id'].partition('/')[0] not in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn','route'}:
+            if row['id'].partition('/')[0] not in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn','antigravity','route'}:
                 status,value = await runner('/v1/responses',{'model':row['id'],'input':marker,'stream':False,'max_output_tokens':16})
                 native = status==200 and isinstance(value,dict) and value.get('object')=='response' and value.get('status')=='completed' and isinstance(value.get('output'),list)
                 if native:

@@ -6,13 +6,14 @@ from urllib.parse import quote
 from fastapi import HTTPException
 from .errors import safe_error_message
 
-PROVIDERS = {'trae', 'codebuddy', 'monkeycode', 'qoder', 'qoder-cn', 'workbuddy_intl'}
+PROVIDERS = {'trae', 'codebuddy', 'monkeycode', 'qoder', 'qoder-cn', 'workbuddy_intl', 'antigravity'}
 
 
 class ScopedMaintenance:
-    def __init__(self, store, pool, native, qoder, workbuddy, connections, task_center):
+    def __init__(self, store, pool, native, qoder, workbuddy, connections, task_center, antigravity=None):
         self.store, self.pool, self.native = store, pool, native
         self.qoder, self.workbuddy, self.connections, self.task_center = qoder, workbuddy, connections, task_center
+        self.antigravity = antigravity
 
     async def accounts(self, providers):
         rows = []
@@ -31,6 +32,8 @@ class ScopedMaintenance:
                      if ('qoder-cn' if r.get('region') == 'cn' else 'qoder') in providers]
         if 'workbuddy_intl' in providers:
             rows += await self.workbuddy.public_accounts()
+        if 'antigravity' in providers and self.antigravity:
+            rows += await self.antigravity.accounts()
         for connection in self.connections.rows():
             if connection['id'] in providers:
                 rows += [{**r, 'provider': connection['id'], 'enabled': r['enabled'] and connection['enabled']}
@@ -47,6 +50,9 @@ class ScopedMaintenance:
             return {'ok': all(r.get('ok') for r in results), 'message': '；'.join(r.get('message', '') for r in results)}
         if provider == 'codebuddy':
             return await asyncio.to_thread(self.pool.operate, aid, 'checkin' if action == 'checkin' else 'status')
+        if provider == 'antigravity' and self.antigravity:
+            if action == 'checkin': return {'ok': True, 'message': 'Antigravity 没有签到活动，已跳过'}
+            return await self.antigravity.operate(aid, 'balance' if action == 'status' else action)
         if provider in {'qoder', 'qoder-cn'}:
             return await self.qoder.operate(aid, action)
         if provider == 'workbuddy_intl':

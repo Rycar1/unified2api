@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  TRAE · CodeBuddy 国内 · WorkBuddy AI 国际站 · MonkeyCode · Qoder 国内／国际 · 自定义服务
+  TRAE · CodeBuddy 国内 · WorkBuddy AI 国际站 · MonkeyCode · Qoder 国内／国际 · Antigravity · 自定义服务
 </p>
 
 <p align="center">
@@ -170,6 +170,7 @@ WorkBuddy `/v1/messages` 使用格式转换，`/v1/messages/count_tokens` 返回
 | WorkBuddy AI 国际站 | 官方网页授权；支持多个账号 | `workbuddy/` |
 | MonkeyCode | Windows 登录助手或导入凭据 | `monkeycode/` |
 | Qoder 国内／国际 | 官方网页授权、PAT 或 JSON；分区多账号池 | `qoder-cn/`、`qoder/` |
+| Antigravity | Google 网页授权、refresh token 或 JSON；独立多账号池 | `antigravity/` |
 | 自定义服务 | Base URL + API Key | 自定前缀 |
 | 智能路由 | 在控制台选择目标模型 | `route/` |
 
@@ -258,6 +259,20 @@ curl http://localhost:8080/v1/models \
 在「模型 → 能力」查看或设置工具、图片和上下文长度。「检测能力」只发送少量合成请求，可能消耗上游额度；不能确认的项目保留为未知。目录、检测和人工标记分别保留来源，支持恢复自动结果。
 
 Responses 原生、格式转换与 Codex 远程压缩分别标记。内置平台不会因人工标签而获得未实现的协议。自定义服务的 `/v1/responses/compact` 直接转发上游，只有真实返回一个 `compaction` 项的检测才标记支持。路由压缩只选已确认支持的目标；DeepSeek 等格式转换渠道不会生成假的压缩项。
+
+### Antigravity
+
+在「账号 → 添加账号」选择 **Antigravity**，通过 Google 网页完成授权，或在「导入凭据」粘贴 Google `refresh_token`（通常以 `1//` 开头）。也接受包含 `refresh_token` / `refreshToken` 的 JSON，可选提供 `project_id` / `projectId`。导入时验证令牌、发现 Cloud Code Assist project，并获取账号自己的 Gemini 模型目录。
+
+本机登录完成后自动添加账号。远程部署时，Google 回调仍使用本机 `localhost` 地址；如果授权后页面无法打开，将浏览器地址栏中的完整回调地址粘贴回控制台，点击「完成授权并添加」。授权状态一次有效、绑定当前管理员会话，10 分钟后过期。
+
+账号支持轮换、暂停、删除、刷新和额度查询；额度按各周期的剩余百分比展示，不换算成其他平台的积分。临期自动续期；单账号限额在输出前尝试其他账号，已经开始输出的请求不会重放。工具调用保存 thought signature 并保持原账号，防止多账号轮换破坏工具续接。Antigravity 没有签到活动，因此不显示签到按钮。
+
+模型使用 `antigravity/` 前缀，例如 `antigravity/gemini-3-flash`；实际可用名称以模型页和 `/v1/models` 为准。支持 Chat Completions，以及转换后的 Responses、Messages；工具、思考内容和 Token 用量随响应返回，不提供原生 Responses 压缩。输入图片使用 base64 data URL。缺少上游完成标记会回显流中断错误。
+
+Google 服务需要可用的出网网络；后端默认读取系统代理环境变量，也可配置 `ANTIGRAVITY_PROXY=http://proxy-host:port`。Docker 中的 `localhost` 指容器自身，宿主机代理可使用 `host.docker.internal` 或实际代理地址。首次使用需要在服务端 `.env` 中配置 `ANTIGRAVITY_CLIENT_ID`、`ANTIGRAVITY_CLIENT_SECRET`，使用与 refresh token 匹配的 OAuth 应用参数。仓库不内置这些值；自己的 OAuth 应用也必须具备所需的服务访问权限。
+
+账号凭据使用 AES-GCM 加密保存在管理数据卷中；恢复时需要同一份 `.antigravity.key`，已纳入现有加密 `.ubak` 备份。实现参考 [agent2api](https://github.com/aimod-cc/agent2api)，其许可与使用声明保存在 [第三方说明](THIRD_PARTY_NOTICES.md)。
 
 ### Qoder
 

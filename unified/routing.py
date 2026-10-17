@@ -42,6 +42,10 @@ async def inventory(api):
     if api.connections:
         for row in api.connections.rows():
             result[row['id']] = api.connections.pool_inventory(row['id'])
+    if getattr(api,'antigravity',None):
+        # Each model group has its own percentage; the smallest group must not
+        # disable every other Gemini model. The pool handles per-model cooldown.
+        result['antigravity'] = availability([{**row,'remaining':None} for row in await api.antigravity.accounts()])
     api.inventory_cache = (time.monotonic(),result)
     return result
 
@@ -71,6 +75,8 @@ async def dispatch(api,provider,scope,receive,send,body):
             return await api.qoder.relay(scope['path'],body,scope,receive,emit)
         if provider=='workbuddy':
             return await api.workbuddy.relay(scope['path'],body,scope,receive,emit)
+        if provider=='antigravity':
+            return await api.antigravity.relay(scope['path'],body,scope,receive,emit)
         if provider!='codebuddy':
             return await api.connections.relay(provider,scope['path'],body,scope,receive,emit)
         sent = False
@@ -85,7 +91,7 @@ async def dispatch(api,provider,scope,receive,send,body):
         return await api.buddy(child,replay,emit)
     try:
         network = getattr(api, 'network', None)
-        if network and provider in {'trae', 'monkeycode', 'codebuddy', 'workbuddy', 'qoder', 'qoder-cn'}:
+        if network and provider in {'trae', 'monkeycode', 'codebuddy', 'workbuddy', 'qoder', 'qoder-cn','antigravity'}:
             from .network import guarded_response
             return await guarded_response(forward, observe, scope['path'], network.get())
         return await forward(observe)

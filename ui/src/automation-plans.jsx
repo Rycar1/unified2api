@@ -6,6 +6,7 @@ const platforms = [
   ['trae', 'TRAE'],
   ['codebuddy', 'CodeBuddy 国内'],
   ['workbuddy_intl', 'WorkBuddy 国际'],
+  ['antigravity', 'Antigravity'],
   ['monkeycode', 'MonkeyCode'],
   ['qoder-cn', 'Qoder 国内'],
   ['qoder', 'Qoder 国际'],

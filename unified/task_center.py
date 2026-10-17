@@ -107,6 +107,9 @@ class TaskCenter:
             self.config.set('activity_history',(history+[metadata(row)])[-1000:])
 
     async def quota(self,provider,aid):
+        if provider=='antigravity' and getattr(self,'antigravity',None):
+            value = await self.antigravity.operate(aid, 'balance')
+            return {'provider':'antigravity', 'unit':'%', 'remaining':value['remaining'], 'quota':value['windows']}
         if provider in {'trae','monkeycode'} and self.native:
             if provider=='trae':
                 code,result=await self.native.request('POST','/admin/api/accounts/'+quote(aid,safe='')+'/balance',b'{}')

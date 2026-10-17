@@ -84,16 +84,21 @@ def request_to_chat(payload, path):
 
 
 class QoderRelay:
+    provider_label = 'Qoder'
+
     def __init__(self):
         self.history = OrderedDict()
         self.history_bytes = 0
+
+    def history_key(self, rid):
+        return rid
 
     def remember(self, chat, result):
         history = chat.get("messages", []) + responses_request_to_chat({"input": result.get("output", [])}).get("messages", [])
         size = len(compact(history).encode())
         if size > 16 * 1024 * 1024:
             return
-        rid = result["id"]
+        rid = self.history_key(result["id"])
         if rid in self.history:
             self.history_bytes -= self.history.pop(rid)[2]
         self.history[rid] = (time.monotonic() + 3600, history, size)
@@ -109,7 +114,7 @@ class QoderRelay:
             chat = request_to_chat(payload, path)
             previous = payload.get("previous_response_id")
             if previous:
-                record = self.history.get(previous)
+                record = self.history.get(self.history_key(previous))
                 if not record or record[0] <= time.monotonic():
                     raise HTTPException(400, "previous_response_id 不存在或已过期，请发送完整上下文")
                 chat["messages"] = record[1] + chat.get("messages", [])
@@ -124,7 +129,7 @@ class QoderRelay:
         try:
             first = await anext(source)
         except StopAsyncIteration:
-            raise HTTPException(502, "Qoder 没有返回模型输出") from None
+            raise HTTPException(502, self.provider_label + " 没有返回模型输出") from None
         rid, created = "chatcmpl-" + secrets.token_hex(12), int(time.time())
 
         async def normalized():
@@ -179,6 +184,8 @@ class QoderRelay:
                         tool = tools.setdefault(call.get("index", 0), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
                         if call.get("id"):
                             tool["id"] = call["id"]
+                        if call.get('extra_content'):
+                            tool['extra_content'] = call['extra_content']
                         for field in ("name", "arguments"):
                             tool["function"][field] += (call.get("function") or {}).get(field, "")
             if adapter:

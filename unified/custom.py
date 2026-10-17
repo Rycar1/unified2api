@@ -74,7 +74,7 @@ class Connections(CustomPool):
                     continue
                 row[field] = body[field]
         cid = row.get("id", "")
-        if not isinstance(cid, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", cid) or cid in {"trae", "codebuddy", "monkeycode", "workbuddy", "qoder", "qoder-cn"}:
+        if not isinstance(cid, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", cid) or cid in {"trae", "codebuddy", "monkeycode", "workbuddy", "qoder", "qoder-cn", "antigravity"}:
             raise HTTPException(400, "服务标识须为小写英文开头的 1–40 位字母、数字、下划线或短横线，不能使用内置平台名称")
         for field in ("name", "base_url", "key"):
             if not isinstance(row.get(field), str) or not row[field].strip():

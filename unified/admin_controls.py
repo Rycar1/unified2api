@@ -37,7 +37,7 @@ def register_controls(app,body_json,store,api,log,controls,capabilities,releases
             store.test_keys.add(hashed)
         async def runner(path,body):
             provider,_,model = body['model'].partition('/')
-            if provider not in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn','route'}:
+            if provider not in {'trae','monkeycode','codebuddy','workbuddy','qoder','qoder-cn','antigravity','route'}:
                 connection = api.connections.get(provider)
                 try:
                     async with api.connections.client(connection.get('kind','openai')) as client:

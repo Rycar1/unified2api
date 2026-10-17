@@ -3,11 +3,12 @@ import { Download, RefreshCw, Upload, Gift, WalletCards, ShieldCheck } from 'luc
 import { CreditGrants, ExecutionRecords } from './benefit-records'
 import { BenefitTasks } from './benefit-tasks'
 import { QuotaDetails } from './quota-details'
+import { AntigravityQuota } from './antigravity'
 
 const platform = (a) =>
   a.provider === 'qoder'
     ? `Qoder ${a.region === 'cn' ? '国内' : '国际'}`
-    : { codebuddy: 'CodeBuddy 国内', workbuddy_intl: 'WorkBuddy 国际', trae: 'TRAE', monkeycode: 'MonkeyCode' }[
+    : { codebuddy: 'CodeBuddy 国内', workbuddy_intl: 'WorkBuddy 国际', trae: 'TRAE', monkeycode: 'MonkeyCode', antigravity: 'Antigravity' }[
         a.provider
       ] || a.provider
 const number = (n, suffix = '') =>
@@ -67,7 +68,7 @@ export function QuotaDialog({ account, request, Modal, onClose }) {
   return (
     <Modal title="额度明细" subtitle={`${platform(account)} · ${account.name || account.uid}`} onClose={onClose}>
       <Notice error={state.error || payloadError(state.value, '额度查询失败')} />
-      {state.loading && !state.value ? <Loading /> : state.value && <QuotaDetails value={state.value} />}
+      {state.loading && !state.value ? <Loading /> : state.value && (account.provider === 'antigravity' ? <AntigravityQuota value={state.value} /> : <QuotaDetails value={state.value} />)}
       <button className="button secondary" disabled={state.loading} onClick={state.load}>
         <RefreshCw size={15} />
         重新查询

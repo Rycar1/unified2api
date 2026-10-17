@@ -53,6 +53,7 @@ import { Dashboard } from './dashboard'
 import { uniqueModels } from './model-list'
 import { NetworkPanel, RoutePlanDialog, ConnectionPoolDialog } from './operations'
 import { AutomationCenter } from './automation-plans'
+import { AntigravityCallback } from './antigravity'
 import { ModelAliasesPanel } from './reliability'
 import { ProbePlansPage } from './probe-plans'
 import { ConfigHistoryPage } from './config-history'
@@ -125,6 +126,7 @@ const accountProviders = [
   ['workbuddy_intl', 'WorkBuddy AI 国外'],
   ['monkeycode', 'MonkeyCode'],
   ['qoder', 'Qoder'],
+  ['antigravity', 'Antigravity'],
 ]
 const providerName = (id) =>
   ({
@@ -316,6 +318,7 @@ function AccountDialog({ csrf, onClose, onSaved }) {
         if (flow.provider === 'monkeycode') result = await request(`unified/monkeycode/login/${flow.id}`)
         if (flow.provider === 'workbuddy_intl') result = await request(`unified/workbuddy/login/${flow.id}`)
         if (flow.provider === 'qoder') result = await request(`unified/qoder/login/${flow.id}`)
+        if (flow.provider === 'antigravity') result = await request(`unified/antigravity/login/${flow.id}`)
         if (stopped) return
         const state = result.state || result.status
         if (state === 'success') {
@@ -382,10 +385,13 @@ function AccountDialog({ csrf, onClose, onSaved }) {
           body: { name: name.trim(), region: qoderRegion },
           csrf,
         })
+      if (provider === 'antigravity')
+        result = await request('unified/antigravity/login', { method: 'POST', body: { name: name.trim() }, csrf })
       const next = {
         provider,
         id: result.pending_id || result.id,
         url: result.login_url || result.url || result.launch_url,
+        manual: result.manual_callback,
       }
       setFlow(next)
       setStatus('登录页面已打开，请完成官方登录')
@@ -414,7 +420,7 @@ function AccountDialog({ csrf, onClose, onSaved }) {
         const value = credential.trim()
         if (value.startsWith('{')) body.credential = JSON.parse(value)
         else body.cookie = value
-      } else if (provider === 'qoder' && credential.trim().startsWith('pt-')) {
+      } else if (provider === 'antigravity' || provider === 'qoder' && credential.trim().startsWith('pt-')) {
         body.credential = credential.trim()
       } else {
         body.credential = JSON.parse(credential)
@@ -500,6 +506,9 @@ function AccountDialog({ csrf, onClose, onSaved }) {
               选择 Qoder 账号完成授权后会自动添加。可以多次登录添加不同账号，调用时由账号池轮换。
             </p>
           )}
+          {provider === 'antigravity' && (
+            <p className="field-help">使用 Google 账号授权后加入独立账号池。也可切换“导入凭据”粘贴 refresh token；调用需要服务器能够连接 Google。</p>
+          )}
           <button className="button primary wide" onClick={startLogin} disabled={busy || Boolean(flow)}>
             <ExternalLink size={15} />
             {busy ? '正在准备…' : flow ? '等待登录完成…' : '打开登录页面'}
@@ -511,6 +520,9 @@ function AccountDialog({ csrf, onClose, onSaved }) {
             <a className="button secondary wide" href={flow.url} target="_blank" rel="noopener noreferrer">
               再次打开登录页面
             </a>
+          )}
+          {provider === 'antigravity' && flow && (
+            <AntigravityCallback key={flow.id} flow={flow} request={request} csrf={csrf} onSaved={onSaved} />
           )}
           {provider === 'monkeycode' && (
             <a className="helper-download" href="/admin/downloads/monkey-login-helper.zip" download>
@@ -524,7 +536,7 @@ function AccountDialog({ csrf, onClose, onSaved }) {
           <label>凭据文件</label>
           <input type="file" accept=".json,.info,.txt" onChange={loadFile} />
           <label>
-            {provider === 'monkeycode' ? 'Cookie 或 JSON' : provider === 'qoder' ? 'PAT 或 JSON 凭据' : 'JSON 凭据'}
+            {provider === 'antigravity' ? 'Google refresh token 或 JSON 凭据' : provider === 'monkeycode' ? 'Cookie 或 JSON' : provider === 'qoder' ? 'PAT 或 JSON 凭据' : 'JSON 凭据'}
           </label>
           <textarea
             value={credential}
@@ -532,7 +544,7 @@ function AccountDialog({ csrf, onClose, onSaved }) {
             rows="7"
             required
             placeholder={
-              provider === 'monkeycode'
+              provider === 'antigravity' ? '1//… 或 { "refresh_token": "…", "project_id": "…" }' : provider === 'monkeycode'
                 ? 'monkeycode_ai_session=…'
                 : provider === 'qoder'
                   ? 'pt-… 或 { "uid": "…", "accessToken": "…", "refreshToken": "…" }'
@@ -785,7 +797,7 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback, onDetails }) 
           : accountEndpoint(account, account.provider === 'codebuddy' ? `/actions/${action}` : `/${action}`)
       const result = await request(path, { method: 'POST', body: {}, csrf })
       if (result.ok === false) throw new Error(result.message || '账号操作失败')
-      const balance = typeof result.remaining === 'number' ? `，当前余额 ${result.remaining.toLocaleString()}` : ''
+      const balance = typeof result.remaining === 'number' ? `，当前${account.quota_unit === '%' ? '额度' : '余额'} ${result.remaining.toLocaleString()}${account.quota_unit || ''}` : ''
       const fallback = action === 'checkin' ? '签到完成' : action === 'status' ? '余额已更新' : '刷新完成'
       onFeedback(account, (result.message || fallback) + balance, false)
       await onRefresh()
@@ -836,7 +848,7 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback, onDetails }) 
   const disabled = Boolean(busy) || account.enabled === false
   return (
     <div className="account-actions">
-      <button
+      {account.provider !== 'antigravity' && <button
         className="mini-action"
         onClick={() => run('checkin')}
         disabled={disabled}
@@ -844,14 +856,14 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback, onDetails }) 
       >
         <Activity size={13} />
         <span>{busy === 'checkin' ? '执行中' : account.provider === 'workbuddy_intl' ? '每日活跃' : '签到'}</span>
-      </button>
+      </button>}
       <button className="mini-action" onClick={() => run('refresh')} disabled={disabled} title="刷新凭据和额度">
         <RefreshCw size={13} className={busy === 'refresh' ? 'spin' : ''} />
         <span>{busy === 'refresh' ? '刷新中' : '刷新'}</span>
       </button>
       <button className="mini-action" onClick={() => run('status')} disabled={disabled} title="查询最新余额">
         <WalletCards size={13} />
-        <span>{busy === 'status' ? '查询中' : '余额'}</span>
+        <span>{busy === 'status' ? '查询中' : account.quota_unit === '%' ? '额度' : '余额'}</span>
       </button>
       <button
         ref={moreButton}
@@ -990,7 +1002,7 @@ function Accounts({ data, csrf, onRefresh, onAdd, onImport }) {
                   <td>
                     <StatusBadge status={status} />
                   </td>
-                  <td className="tabular">{typeof remaining === 'number' ? remaining.toLocaleString() : '—'}</td>
+                  <td className="tabular">{typeof remaining === 'number' ? remaining.toLocaleString() + (account.quota_unit || '') : '—'}</td>
                   <td>
                     <span className="muted">
                       {account.expires_at ? new Date(account.expires_at).toLocaleDateString('zh-CN') : '未提供'}
@@ -1201,7 +1213,7 @@ function Models({ data, onNavigate, csrf, onRefresh }) {
       const id = model.id.split('/')[0]
       counts.set(id, (counts.get(id) || 0) + 1)
     }
-    const order = ['trae', 'codebuddy', 'workbuddy', 'monkeycode', 'qoder-cn', 'qoder', 'route']
+    const order = ['trae', 'codebuddy', 'workbuddy', 'monkeycode', 'qoder-cn', 'qoder', 'antigravity', 'route']
     return [...order.filter((id) => counts.has(id)), ...[...counts.keys()].filter((id) => !order.includes(id))].map(
       (id) => ({ id, label: providerName(id === 'qoder-cn' ? 'qoder_cn' : id), count: counts.get(id) }),
     )
