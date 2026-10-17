@@ -343,6 +343,18 @@ docker compose up -d --build
 
 ## 安全与部署
 
+### 出站代理
+
+在「设置 → 出站代理」填写 HTTP/HTTPS 代理地址，可包含用户名和密码，保存后新请求立即生效：
+
+- **Antigravity 独立代理**：只用于 Google 授权、令牌刷新、模型和额度查询，不改变其他平台的网络出口。
+- **全局代理**：用于 TRAE、CodeBuddy、WorkBuddy、MonkeyCode、Qoder 和自定义服务。Antigravity 独立代理、WorkBuddy 已有的账号代理优先于全局代理。
+- 清除独立代理后 Antigravity 跟随全局代理；清除全局代理后其余平台直接连接。内部管理接口和容器健康检查不走代理。
+
+地址与认证信息加密存储在管理数据卷中，接口仅返回是否已配置。导出完整备份时请保留对应加密密钥。也可通过 `ANTIGRAVITY_PROXY` / `UNIFIED_OUTBOUND_PROXY` 提供初始配置；网页保存的设置优先。
+
+容器中的 `127.0.0.1` 指向容器自身。使用宿主机代理时，填写容器可访问的宿主机地址，并限制代理监听范围和认证，避免向公网开放。Mihomo 可使用独立 HTTP 入口，无需开启 TUN 或改变服务器默认路由；配置方式见 [Mihomo 官方文档](https://wiki.metacubex.one/en/config/general/)。
+
 - `.env`、Cookie、账号导出文件和真实 API Key 不应提交到 GitHub。
 - 管理会话使用 HttpOnly Cookie，写操作需要 CSRF Token；上游 Key 不会在管理列表中明文回显。
 - 默认只运行一个 Docker 容器。WorkBuddy 国际站的 Python 账号池由主程序管理，在容器内监听回环地址，不向公网暴露端口。沿用原有数据卷，升级无需重新添加账号。

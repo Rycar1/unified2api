@@ -53,7 +53,8 @@ class BillingError(Exception):
 class AccountPool:
     def __init__(self, store, clock=time.time, client_factory=None):
         self.store, self.clock = store, clock
-        self.client_factory = client_factory or (lambda: httpx.Client(timeout=20, follow_redirects=False))
+        self.client_factory = client_factory or (lambda: httpx.Client(timeout=20, follow_redirects=False,
+            **(self.outbound.options() if getattr(self, 'outbound', None) else {'trust_env': False})))
         self.locks = {}
         self.cursor = 0
         self.active = {}

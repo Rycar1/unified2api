@@ -147,6 +147,7 @@ func NewWorkClient(configs ...WorkClientConfig) *WorkClient {
 	}
 
 	tr := &http.Transport{
+		Proxy: OutboundProxy,
 		TLSClientConfig: &tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			NextProtos:         []string{"h2"},

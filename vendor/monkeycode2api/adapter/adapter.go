@@ -9,6 +9,7 @@ import (
 	"monkeycode2api/internal/server"
 	"monkeycode2api/internal/upstream"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,8 @@ import (
 )
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+var OutboundProxy func(*http.Request) (*url.URL, error)
 
 type service struct {
 	mu  sync.Mutex
@@ -41,6 +44,9 @@ func New(ctx context.Context, dir string) (http.Handler, error) {
 		return nil, err
 	}
 	s := &service{dir: dir, p: pool.New(filepath.Join(dir, "state.json")), up: upstream.New()}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = OutboundProxy
+	s.up.HTTP.Transport = transport
 	s.up.HTTP.Timeout = 30 * time.Second
 	s.up.Models = upstream.NewModelCatalog()
 	for _, a := range accounts {

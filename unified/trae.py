@@ -7,7 +7,7 @@ import os
 
 
 class Trae:
-    def __init__(self):
+    def __init__(self, proxy=None):
         self.lib = ctypes.CDLL(os.environ.get("TRAE_LIBRARY", "/app/libtrae.so"))
         for name, args, result in [
             ("TraeInit", [], ctypes.c_void_p),
@@ -16,12 +16,19 @@ class Trae:
             ("TraeCancel", [ctypes.c_ulonglong], None),
             ("TraeStop", [], None),
             ("TraeFree", [ctypes.c_void_p], None),
+            ("TraeSetProxy", [ctypes.c_char_p], ctypes.c_void_p),
         ]:
             fn = getattr(self.lib, name)
             fn.argtypes, fn.restype = args, result
+        self.set_proxy(proxy or '')
         error = self.string(self.lib.TraeInit())
         if error:
             raise RuntimeError(error)
+
+    def set_proxy(self, value):
+        error = self.string(self.lib.TraeSetProxy(value.encode()))
+        if error:
+            raise RuntimeError('Native outbound proxy configuration failed')
 
     def string(self, pointer):
         try:

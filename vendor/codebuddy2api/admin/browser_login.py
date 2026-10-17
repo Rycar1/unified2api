@@ -23,7 +23,8 @@ TTL = 300
 class BrowserLogin:
     def __init__(self, save_account, client_factory=None, clock=time.time):
         self.save_account = save_account
-        self.client_factory = client_factory or (lambda: httpx.AsyncClient(headers=HEADERS, timeout=20, follow_redirects=False))
+        self.client_factory = client_factory or (lambda: httpx.AsyncClient(headers=HEADERS, timeout=20, follow_redirects=False,
+            **(self.outbound.options() if getattr(self, 'outbound', None) else {'trust_env': False})))
         self.clock = clock
         self.flows = {}
         self.guard = asyncio.Lock()

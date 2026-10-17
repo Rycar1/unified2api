@@ -51,7 +51,9 @@ class QoderHubTransport:
         self.sessions = {}
 
     def client(self, short=True):
-        return httpx.AsyncClient(transport=self.http_transport, trust_env=False, follow_redirects=False,
+        outbound = getattr(self, 'outbound', None)
+        return httpx.AsyncClient(transport=self.http_transport, follow_redirects=False,
+            **(outbound.options(transport=self.http_transport) if outbound else {'trust_env': False}),
             timeout=httpx.Timeout(20 if short else 120, connect=15))
 
     async def request(self, account, path, data=None):

@@ -30,6 +30,13 @@ import time
 from pathlib import Path
 
 import httpx
+
+UNIFIED_OUTBOUND_PROXY = None
+
+
+def outbound_options():
+    return {'proxy': UNIFIED_OUTBOUND_PROXY() if UNIFIED_OUTBOUND_PROXY else None, 'trust_env': False}
+
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -152,7 +159,7 @@ class CredentialManager:
         headers["X-Auth-Refresh-Source"] = "plugin"
         url = f"{BACKEND}/v2/plugin/auth/token/refresh"
         try:
-            with httpx.Client(timeout=15) as c:
+            with httpx.Client(timeout=15, **outbound_options()) as c:
                 r = c.post(url, headers=headers, json={})
             data = r.json()
         except Exception as e:
@@ -613,7 +620,7 @@ async def chat_completions(
 
     # 非流式：后端只支持流式，这里把后端 SSE 聚合成单个 chat.completion 响应
     try:
-        async with httpx.AsyncClient(timeout=300) as c:
+        async with httpx.AsyncClient(timeout=300, **outbound_options()) as c:
             async with c.stream("POST", url, headers=headers, json=body) as r:
                 if r.status_code != 200:
                     raw = await r.aread()
@@ -828,7 +835,7 @@ async def _stream_upstream(
                 saw_filter = True
 
     try:
-        async with httpx.AsyncClient(timeout=None) as c:
+        async with httpx.AsyncClient(timeout=None, **outbound_options()) as c:
             async with c.stream("POST", url, headers=headers, json=body) as r:
                 if r.status_code != 200:
                     err = await r.aread()
@@ -937,7 +944,7 @@ def _chat_body_desensitize(body: dict, *, force_compact: bool = False) -> dict:
 
 
 async def _post_backend_once(url: str, headers: dict, body: dict) -> tuple[int, bytes]:
-    async with httpx.AsyncClient(timeout=120) as c:
+    async with httpx.AsyncClient(timeout=120, **outbound_options()) as c:
         async with c.stream("POST", url, headers=headers, json=body) as r:
             chunks: list[bytes] = []
             async for chunk in r.aiter_bytes():
@@ -1262,7 +1269,7 @@ async def _collect_anthropic_nonstream(
     prefix = f"[{rid}] " if rid else ""
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as c:
+        async with httpx.AsyncClient(timeout=120.0, **outbound_options()) as c:
             async with c.stream("POST", url, headers=headers, json=body) as r:
                 if r.status_code != 200:
                     err = await r.aread()
@@ -1308,7 +1315,7 @@ async def _stream_anthropic(
     prefix = f"[{rid}] " if rid else ""
 
     try:
-        async with httpx.AsyncClient(timeout=None) as c:
+        async with httpx.AsyncClient(timeout=None, **outbound_options()) as c:
             async with c.stream("POST", url, headers=headers, json=body) as r:
                 if r.status_code != 200:
                     err = await r.aread()
@@ -1415,7 +1422,7 @@ async def count_tokens(
     url = f"{BACKEND}/v2/chat/completions"
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, **outbound_options()) as client:
             async with client.stream(
                 "POST", url, headers=headers, json=chat_body
             ) as resp:

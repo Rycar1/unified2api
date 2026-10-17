@@ -302,12 +302,25 @@ class API:
 
 def create_app(native=None, buddy=None, qoder_transport=None):
     buddy = buddy or create_buddy(secure_cookie=os.environ.get("SECURE_COOKIE", "false").lower() == "true")
-    native = native or Trae()
     store, pool = buddy.state.store, buddy.state.pool
+    from .outbound import ProxySettings, register as register_proxies
+    outbound = ProxySettings(store)
+    native = native or Trae(proxy=outbound.resolve())
+    outbound.apply_native = getattr(native, 'set_proxy', None)
+    if outbound.apply_native:
+        outbound.apply_native(outbound.resolve() or '')
+    pool.outbound = outbound
+    buddy.state.browser_login.outbound = outbound
+    from core import converter
+    converter.UNIFIED_OUTBOUND_PROXY = outbound.resolve
     connections = Connections(store.root / "connections.json")
+    connections.outbound = outbound
     qoder_accounts = QoderAccounts(store, transport=qoder_transport)
+    if hasattr(qoder_accounts.transport, 'client'):
+        qoder_accounts.transport.outbound = outbound
     from .antigravity import AntigravityAccounts
     antigravity = AntigravityAccounts(store)
+    antigravity.outbound = outbound
     embedded_workbuddy = None
     if os.environ.get("WORKBUDDY_EMBEDDED", "false").lower() == "true":
         embedded_workbuddy = EmbeddedWorkBuddy(os.environ.get("UNIFIED_API_KEY", ""), os.environ.get("ADMIN_KEY", ""),
@@ -328,6 +341,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     network = NetworkSettings(unified_config)
     if embedded_workbuddy:
         embedded_workbuddy.config=unified_config
+        embedded_workbuddy.outbound=outbound
     workbuddy_login.runtime=embedded_workbuddy
     routes = AdaptiveRoutes(unified_config)
     saved_console_settings = unified_config.get("console_settings", {})
@@ -371,6 +385,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(AdminMiddleware)
+    register_proxies(app, store, outbound, body_json)
     controls = KeyControls(unified_config,request_log.path)
     capabilities = ModelCapabilities(unified_config)
     releases = ReleaseManager(store.root / "releases")
@@ -922,6 +937,7 @@ def create_app(native=None, buddy=None, qoder_transport=None):
     result.state.workbuddy_login = workbuddy_login
     result.state.qoder_accounts = qoder_accounts
     result.state.antigravity = antigravity
+    result.state.outbound = outbound
     result.state.controls, result.state.capabilities, result.state.releases = controls, capabilities, releases
     result.state.api = api
     return result

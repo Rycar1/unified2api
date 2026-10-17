@@ -121,9 +121,13 @@ class AntigravityAccounts(QoderRelay):
     async def accounts(self): return [self.public(r) for r in self.rows]
 
     def client(self):
-        options = {'timeout': httpx.Timeout(120, connect=15), 'follow_redirects': False, 'trust_env': True}
+        options = {'timeout': httpx.Timeout(120, connect=15), 'follow_redirects': False, 'trust_env': False}
         if self.transport: options['transport'] = self.transport
-        if os.getenv('ANTIGRAVITY_PROXY'): options['proxy'] = os.environ['ANTIGRAVITY_PROXY']
+        outbound = getattr(self, 'outbound', None)
+        if outbound:
+            options.update(outbound.options('antigravity', self.transport))
+        elif not self.transport and os.getenv('ANTIGRAVITY_PROXY'):
+            options['proxy'] = os.environ['ANTIGRAVITY_PROXY']
         return httpx.AsyncClient(**options)
 
     def headers(self, row):

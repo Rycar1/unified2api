@@ -50,8 +50,9 @@ class Connections(CustomPool):
     def client(self, kind="openai"):
         network = getattr(self, 'network', None)
         read_timeout = max(network.get().values()) if network else 900 if kind == 'workbuddy_intl' else 300
+        outbound = getattr(self, 'outbound', None)
         return httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(None, read=read_timeout, connect=20),
-                                 follow_redirects=False, trust_env=False)
+                                 follow_redirects=False, **(outbound.options(transport=self.transport) if outbound else {'trust_env': False}))
 
     def get(self, cid):
         with self.lock:

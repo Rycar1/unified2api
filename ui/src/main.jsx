@@ -52,6 +52,7 @@ import './theme.css'
 import { Dashboard } from './dashboard'
 import { uniqueModels } from './model-list'
 import { NetworkPanel, RoutePlanDialog, ConnectionPoolDialog } from './operations'
+import { ProxySettingsPanel } from './proxy-settings'
 import { AutomationCenter } from './automation-plans'
 import { AntigravityCallback } from './antigravity'
 import { ModelAliasesPanel } from './reliability'
@@ -2801,6 +2802,7 @@ function App() {
           onNavigate={navigate}
         />
         <ProviderSettings request={request} csrf={csrf} />
+        <ProxySettingsPanel request={request} csrf={csrf} />
       </>
     ),
   }

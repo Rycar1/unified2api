@@ -81,6 +81,8 @@ func (w *writer) Flush() { w.WriteHeader(200) }
 
 //export TraeInit
 func TraeInit() *C.char {
+	upstream.OutboundProxy = nativeProxy
+	adapter.OutboundProxy = nativeProxy
 	cfg, err := Load("")
 	if err != nil {
 		return C.CString(err.Error())

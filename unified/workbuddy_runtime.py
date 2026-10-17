@@ -19,6 +19,9 @@ class EmbeddedWorkBuddy:
         if str(source) not in sys.path:
             sys.path.insert(0, str(source))
         self.proxy = importlib.import_module("wb_proxy")
+        if getattr(self, 'outbound', None):
+            from .outbound import install_workbuddy
+            install_workbuddy(self.proxy.wb_accounts, self.outbound)
         self.proxy.USAGE_DIR = str(self.usage_dir)
         self.proxy.USAGE_LOG = str(Path(self.usage_dir) / "usage.jsonl")
         for name,filename in {'LIMIT_EVENTS_FILE':'limit-events.jsonl','ESTIMATE_DAILY_FILE':'estimate-daily.json',
