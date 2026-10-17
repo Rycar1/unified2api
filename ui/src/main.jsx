@@ -576,8 +576,9 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
           models: (initialConnection.models || []).join('\n'),
           enabled: initialConnection.enabled !== false,
           kind: initialConnection.kind || 'openai',
+          opencode_support: initialConnection.opencode_support === true,
         }
-      : { name: '', id: '', base_url: '', key: '', models: '', enabled: true, kind: 'openai' },
+      : { name: '', id: '', base_url: '', key: '', models: '', enabled: true, kind: 'openai', opencode_support: false },
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -593,6 +594,7 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
       .filter(Boolean),
     enabled: form.enabled,
     kind: form.kind,
+    opencode_support: form.opencode_support,
     ...(initialConnection ? { existing_id: initialConnection.id } : {}),
   })
   async function discover() {
@@ -688,6 +690,13 @@ function ConnectionDialog({ csrf, initialConnection, onClose, onSaved }) {
         <button className="button secondary wide" type="button" onClick={discover} disabled={busy}>
           读取模型列表
         </button>
+        <label className="switch-row">
+          <span>
+            <strong>启用 OpenCode 支持</strong>
+            <small>保留会话信息和客户端标识，缺少时自动补充，仅作用于此服务</small>
+          </span>
+          <input type="checkbox" checked={form.opencode_support} onChange={(e) => update('opencode_support', e.target.checked)} />
+        </label>
         <label className="switch-row">
           <span>
             <strong>启用服务</strong>
@@ -1174,6 +1183,7 @@ function Connections({ data, csrf, onRefresh, onAdd, onEdit }) {
             <td>
               <strong>{item.name}</strong>
               <small>
+                {item.opencode_support ? 'OpenCode · ' : ''}
                 {item.kind === 'workbuddy_intl' ? 'WorkBuddy AI 国际站 · ' : ''}
                 {item.base_url}
               </small>

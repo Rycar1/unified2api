@@ -30,6 +30,8 @@ class Connections(CustomPool):
         self.data = json.loads(path.read_text("utf-8")) if path.exists() else {}
         self._migrate_workbuddy()
         self.init_pool()
+        from .opencode import OpenCodeSupport
+        self.opencode = OpenCodeSupport(path.parent)
 
     def _migrate_workbuddy(self):
         # Older releases stored the built-in international pool as a custom
@@ -69,7 +71,7 @@ class Connections(CustomPool):
 
     def validate(self, body, old=None):
         row = dict(old or {})
-        for field in ("id", "name", "base_url", "key", "models", "enabled", "kind", "adapter", "balance_scheme", "balance_key", "balance_user_id"):
+        for field in ("id", "name", "base_url", "key", "models", "enabled", "kind", "adapter", "balance_scheme", "balance_key", "balance_user_id", "opencode_support"):
             if field in body:
                 if field in {"key", "balance_key"} and old and body[field] == "":
                     continue
@@ -106,6 +108,9 @@ class Connections(CustomPool):
         row.setdefault("enabled", True)
         if type(row["enabled"]) is not bool:
             raise HTTPException(400, "启用状态必须为布尔值")
+        row.setdefault('opencode_support', False)
+        if type(row['opencode_support']) is not bool:
+            raise HTTPException(400, 'OpenCode 支持开关必须为布尔值')
         if row.get('balance_scheme', 'none') not in {'none', 'deepseek', 'newapi', 'sub2api'}:
             raise HTTPException(400, '不支持的余额查询方案')
         for field in ('balance_key', 'balance_user_id'):
@@ -194,10 +199,12 @@ class Connections(CustomPool):
         if row.get("kind") == "workbuddy_intl" and row.get("adapter") != "hub" and path != "/v1/chat/completions":
             raise HTTPException(400, "WorkBuddy AI 中转仅支持 Chat Completions")
         started = False
+        extra, session_context = self.opencode.prepare(row['id'], scope, body) if row.get('opencode_support') else ({}, None)
         try:
             async with self.client(row.get("kind", "openai")) as client:
                 async with client.stream("POST", row["base_url"] + path.removeprefix("/v1"), content=body,
                         headers={"Authorization": "Bearer " + row["key"], "Content-Type": "application/json",
+                                 **extra,
                                  **({"X-Unified-Account-Uid":row["account_uid"]} if row.get("adapter")=="hub" and row.get("account_uid") else {}),
                                  **({"X-Realm": "intl"} if row.get("adapter") == "hub" else
                                     {"x-wb-site": "intl"} if row.get("kind") == "workbuddy_intl" else {})}) as response:
@@ -217,10 +224,12 @@ class Connections(CustomPool):
                         from .diagnostics import note_account
                         note_account("workbuddy",response.headers["X-Unified-Account"])
                     async def chunks():
-                        if "text/event-stream" in content_type and path == "/v1/chat/completions":
+                        if "text/event-stream" in content_type and (path == "/v1/chat/completions" or session_context):
                             # Empty tool arrays must not split reasoning blocks in AI SDK clients.
                             async for line in response.aiter_lines():
                                 if line.startswith("data:"):
+                                    if session_context and path.startswith('/v1/responses'):
+                                        self.opencode.observe(session_context, line[5:])
                                     try:
                                         event = json.loads(line[5:])
                                         for choice in event.get("choices", []):
@@ -232,8 +241,13 @@ class Connections(CustomPool):
                                         pass
                                 yield (line + "\n").encode()
                         else:
+                            observed = bytearray()
                             async for chunk in response.aiter_bytes():
+                                if session_context and path.startswith('/v1/responses') and len(observed) <= 65536:
+                                    observed.extend(chunk[:65537-len(observed)])
                                 yield chunk
+                            if session_context and len(observed) <= 65536:
+                                self.opencode.observe(session_context, observed)
                     started = True
                     await StreamingResponse(chunks(), status_code=response.status_code,
                         headers={"Content-Type": content_type, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})(scope, receive, send)

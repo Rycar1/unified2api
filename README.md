@@ -240,6 +240,10 @@ curl http://localhost:8080/v1/models \
 
 自定义服务需要服务前缀、Base URL、上游 API Key 和模型列表。例如前缀为 `myapi`，上游模型为 `org/model`，调用时使用 `myapi/org/model`。
 
+接入 OpenCode Go 时，在「添加服务」或「编辑服务」勾选 **启用 OpenCode 支持**。该开关仅对当前服务生效，默认关闭；开启后，Chat / Responses 转发保留客户端会话头与真实 User-Agent，自动补齐 `x-opencode-session`。控制台测试请求也适用，Responses 续接会关联已返回的 response ID。
+
+建议客户端明确发送每个对话的会话 ID。缺少时，中转对调用密钥、服务和开场上下文进行 HMAC 运算生成匿名 ID，不保存对话正文；相同开场可能共用路由标识，压缩改变开场时也可能改变标识。Responses 续接关联在内存中保留一小时。身份凭据使用配置的上游 Key，客户端 Cookie 和无关请求头不会被转发。要求见 [OpenCode Go 官方说明](https://opencode.ai/docs/go/#where-can-i-use-it)。
+
 智能路由把多个模型放在一个稳定别名下。例如创建 `code-stable` 路由后，客户端调用 `route/code-stable`。可选择顺序优先、轮询、低延迟或「自适应：余额、并发与健康」策略。
 
 自适应策略跳过已确认额度耗尽、冷却和并发已满的目标，结合近期成功率和首响应耗时分配请求。未知余额仍可尝试，各平台积分不会直接跨平台比较。可设置每个目标与每个账号的并发上限；请求结束或取消后释放占用。故障转移仅发生在有效内容或工具调用输出之前，已经输出的请求不会切换上游。
