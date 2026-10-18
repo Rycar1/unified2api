@@ -46,7 +46,8 @@ def classify_error(value, status=None):
     for code in codes:
         if code in TEXT_CODES: return {'error_category':TEXT_CODES[code],'upstream_code':code}
     text=' '.join(parts)
-    if 'context' in text and any(w in text for w in ('too long','maximum','exceed')): category='context_length'
+    if re.search(r'\bunknown model\s+["\']',text): category='model_not_found'
+    elif 'context' in text and any(w in text for w in ('too long','maximum','exceed')): category='context_length'
     elif 'stream' in text and 'timeout' in text: category='stream_timeout'
     elif status==429: category='rate_limited'
     elif status in (401,403): category='authentication'

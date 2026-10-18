@@ -29,7 +29,7 @@ class RouteRecovery(unittest.IsolatedAsyncioTestCase):
             async def stream_native(self,scope,receive,send,body):
                 model=json.loads(body)['model'];calls.append(model)
                 if test.failed and model=='temporarily-hidden':
-                    result={'error':{'code':'model_not_found','message':'temporarily unavailable'}}
+                    result={'error':{'code':'invalid_request','message':'unknown model "temporarily-hidden"'}}
                     status=400
                     # Headers can arrive before an error body. Failover must
                     # preserve its classification rather than cancel it early.
