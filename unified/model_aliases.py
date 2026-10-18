@@ -51,7 +51,7 @@ class ModelAliases:
                  'alias_target':r['target'], 'provider_name':'模型别名'} for r in self.rows()
                 if r['enabled'] and r['target'] in by_id and r['id'] not in by_id]
 
-    def resolve(self, mid, catalog):
+    def resolve(self, mid, catalog, *, allow_unlisted=False):
         ids = {r['id'] for r in catalog if not r.get('alias_target')}
         row = next((r for r in self.rows() if r['id']==mid), None)
         if row:
@@ -66,7 +66,7 @@ class ModelAliases:
         candidates = sorted(i for i in ids if i.startswith(prefix+'/'))
         # An unavailable/empty provider catalog must not disable working APIs.
         # Custom services can deliberately use models not advertised by /models.
-        if prefix in BUILTINS and candidates and mid not in ids:
+        if not allow_unlisted and prefix in BUILTINS and candidates and mid not in ids:
             suggestions = get_close_matches(mid, candidates, n=3, cutoff=.45)
             raise HTTPException(400, {'code':'model_not_found','message':'模型 ID 不在当前目录中，请检查实际请求模型；显示名称不会替代模型 ID',
                                      'suggestions':suggestions})

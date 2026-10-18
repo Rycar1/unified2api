@@ -91,7 +91,12 @@ class RouteManager:
         if not isinstance(targets, list) or not 1 <= len(targets) <= 20:
             raise HTTPException(400, "请选择 1–20 个目标模型")
         targets = list(dict.fromkeys(str(item).strip() for item in targets))
-        if any(t.startswith("route/") or t not in existing_models for t in targets):
+        # Updating a route must not discard previously validated targets just
+        # because the provider currently hides models for exhausted accounts.
+        retained = next((set(row['targets']) for row in self.config.get('routes',[])
+                         if row['id']==current_id),set())
+        known_models = set(existing_models) | retained
+        if any(t.startswith("route/") or t not in known_models for t in targets):
             raise HTTPException(400, "路由目标必须是当前可用的非路由模型")
         strategy = value.get("strategy", "priority")
         if strategy not in {"priority", "round_robin", "latency"}:

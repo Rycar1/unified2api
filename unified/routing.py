@@ -14,10 +14,18 @@ async def inventory(api):
     cached = getattr(api,'inventory_cache',None)
     if cached and cached[0]>time.monotonic()-5:
         return cached[1]
+    task = getattr(api,'inventory_task',None)
+    if task is None or task.done():
+        task = api.inventory_task = asyncio.create_task(refresh_inventory(api))
+    # One disconnected caller must not cancel the shared account snapshot.
+    return await asyncio.shield(task)
+
+
+async def refresh_inventory(api):
     result = {}
     async def native_rows(provider,path):
         try:
-            code,data = await api.native.request('GET',path)
+            code,data = await asyncio.wait_for(api.native.request('GET',path),4)
             if code==200:
                 rows = data.get('accounts',[])
                 result[provider] = availability(rows)
@@ -25,16 +33,18 @@ async def inventory(api):
                     work = availability([{**row,'remaining':row.get('work_credits') or None,
                                           'cooling':row.get('work_cooling',False)} for row in rows])
                     result[provider]['available'] |= work['available']
-        except (RuntimeError,ValueError):
+        except (HTTPException,RuntimeError,ValueError,asyncio.TimeoutError):
             pass
     with api.buddy.state.store.lock:
         result['codebuddy'] = availability(api.buddy.state.pool.rows(api.buddy.state.store.account_rows()))
-    await asyncio.gather(native_rows('trae','/admin/api/accounts'),native_rows('monkeycode','/monkey/admin/accounts'))
-    if api.qoder:
-        rows = await api.qoder.accounts()
-        for region,provider in [('cn','qoder-cn'),('global','qoder')]:
-            result[provider] = availability([row for row in rows if row['region']==region])
-    if api.workbuddy:
+    async def qoder_rows():
+        if api.qoder:
+            rows = await asyncio.wait_for(api.qoder.accounts(),4)
+            for region,provider in [('cn','qoder-cn'),('global','qoder')]:
+                result[provider] = availability([row for row in rows if row['region']==region])
+    async def workbuddy_rows():
+        if not api.workbuddy:
+            return
         try:
             result['workbuddy'] = availability(await asyncio.wait_for(api.workbuddy.public_accounts(),4))
         except (HTTPException,asyncio.TimeoutError):
@@ -42,10 +52,16 @@ async def inventory(api):
     if api.connections:
         for row in api.connections.rows():
             result[row['id']] = api.connections.pool_inventory(row['id'])
-    if getattr(api,'antigravity',None):
-        # Each model group has its own percentage; the smallest group must not
-        # disable every other Gemini model. The pool handles per-model cooldown.
-        result['antigravity'] = availability([{**row,'remaining':None} for row in await api.antigravity.accounts()])
+    async def antigravity_rows():
+        if getattr(api,'antigravity',None):
+            # Each model group has its own percentage; the smallest group must
+            # not disable every other Gemini model. The pool gates per model.
+            rows = await asyncio.wait_for(api.antigravity.accounts(),4)
+            result['antigravity'] = availability([{**row,'remaining':None} for row in rows])
+    # An unavailable platform is unknown, not evidence that every route is down.
+    await asyncio.gather(native_rows('trae','/admin/api/accounts'),
+                         native_rows('monkeycode','/monkey/admin/accounts'),
+                         qoder_rows(),workbuddy_rows(),antigravity_rows(),return_exceptions=True)
     api.inventory_cache = (time.monotonic(),result)
     return result
 
@@ -111,15 +127,21 @@ async def dispatch(api,provider,scope,receive,send,body):
 
 async def route_dispatch(api,rid,scope,receive,send,data):
     route = api.routes.get(rid)
-    snapshot = await inventory(api) if route['strategy']=='smart' else {}
+    adaptive = isinstance(api.routes,AdaptiveRoutes)
+    snapshot = await inventory(api) if adaptive else {}
     by_model = {target:snapshot.get(target.partition('/')[0],{}) for target in route['targets']}
-    route,targets = api.routes.candidates(rid,by_model) if isinstance(api.routes,AdaptiveRoutes) else api.routes.candidates(rid)
+    supported = {}
     capabilities = getattr(api,'capabilities',None)
     if capabilities and scope['path']!='/v1/responses/compact':
         protocol = {'/v1/chat/completions':'chat','/v1/responses':'responses','/v1/messages':'messages'}[scope['path']]
-        targets = [target for target in targets if capabilities.describe({'id':target})['protocols'][protocol]!='unsupported']
+        supported = {target:capabilities.describe({'id':target})['protocols'][protocol]!='unsupported' for target in route['targets']}
     if scope['path']=='/v1/responses/compact':
-        targets = [target for target in targets if api.capabilities.describe({'id':target}).get('compact') is True]
+        supported = {target:api.capabilities.describe({'id':target}).get('compact') is True for target in route['targets']}
+    if adaptive:
+        route,targets = api.routes.candidates(rid,by_model,supported=supported)
+    else:
+        route,targets = api.routes.candidates(rid)
+        targets = [target for target in targets if supported.get(target,True)]
     if not targets:
         raise HTTPException(503,'路由没有余额、健康状态和并发均可用的目标')
     trace = CURRENT_TRACE.get()
@@ -138,10 +160,11 @@ async def route_dispatch(api,rid,scope,receive,send,data):
                 sent = True
                 return {'type':'http.request','body':body,'more_body':False}
             return await receive()
-        child = {**scope,'headers':[(k,v) for k,v in scope['headers'] if k.lower()!=b'content-length']}
+        child = {**scope,'unified_route_target':target,
+                 'headers':[(k,v) for k,v in scope['headers'] if k.lower()!=b'content-length']}
         child['headers'].append((b'content-length',str(len(body)).encode()))
         started = time.monotonic()
-        status,ok = 502,False
+        status,ok,error_category = 502,False,None
         try:
             with api.routes.reserve(target,route) if isinstance(api.routes,AdaptiveRoutes) else nullcontext():
                 if data.get('stream'):
@@ -173,8 +196,6 @@ async def route_dispatch(api,rid,scope,receive,send,data):
                             prefix.feed(event)
                             if event['type']=='http.response.start':
                                 status = event['status']
-                                if not 200<=status<300:
-                                    break
                             elif event['type']=='http.response.body':
                                 if prefix.error or prefix.produced or prefix.terminal or prefix.completed:
                                     break
@@ -183,6 +204,7 @@ async def route_dispatch(api,rid,scope,receive,send,data):
                         from .server import response_failed
                         response_body = b''.join(event.get('body',b'') for event in pending)
                         ok = 200<=status<300 and not response_failed(response_body[:65536])
+                        error_category = prefix.error_info.get('error_category')
                         if ok or index==len(targets)-1:
                             scope['state']['resolved_model'] = target
                             for event in pending:
@@ -208,6 +230,9 @@ async def route_dispatch(api,rid,scope,receive,send,data):
                     from .server import response_failed
                     value = b''.join(event.get('body',b'') for event in events)
                     ok = 200<=status<300 and not response_failed(value[:65536])
+                    from .error_diagnosis import classify_error
+                    if not ok:
+                        error_category = classify_error(value[:65536].decode('utf-8','replace'),status).get('error_category')
                     if ok or index==len(targets)-1:
                         scope['state']['resolved_model'] = target
                         for event in events:
@@ -215,10 +240,12 @@ async def route_dispatch(api,rid,scope,receive,send,data):
                         return
         except HTTPException as exc:
             status = exc.status_code
+            from .error_diagnosis import classify_error
+            error_category = classify_error(exc.detail,status).get('error_category')
             if index==len(targets)-1:
                 raise
         finally:
             observation = scope['state'].get('last_observation',{})
             args = (target,ok,status,(time.monotonic()-started)*1000,route['cooldown_seconds'])
-            api.routes.record(*args,observation.get('ttft_ms')) if isinstance(api.routes,AdaptiveRoutes) else api.routes.record(*args)
+            api.routes.record(*args,observation.get('ttft_ms'),error_category=observation.get('error_category') or error_category) if adaptive else api.routes.record(*args)
     raise HTTPException(503,'所有路由目标均不可用')

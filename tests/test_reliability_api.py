@@ -92,6 +92,7 @@ class ReliabilityAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get(self.root+'/credit-policy/expiring')).json()['items'],[])
 
     async def test_alias_to_route_cannot_become_a_recursive_route_target(self):
+        self.app.state.workbuddy_login.public_accounts=AsyncMock(return_value=[{'id':'synthetic','remaining':10}])
         route={'id':'stable','targets':['workbuddy/glm-5.3-flash']}
         self.assertEqual((await self.client.post(self.root+'/routes',headers=self.csrf,json=route)).status_code,200)
         self.assertEqual((await self.client.post(self.root+'/model-aliases',headers=self.csrf,json={'id':'alias/stable','target':'route/stable'})).status_code,200)

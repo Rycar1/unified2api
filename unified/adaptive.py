@@ -23,14 +23,14 @@ class AdaptiveRoutes(RouteManager):
             route[key] = number
         return route
 
-    def candidates(self,rid,inventory=None,peek=False):
+    def candidates(self,rid,inventory=None,peek=False,supported=None):
         route = self.get(rid)
-        if route['strategy']!='smart':
-            return super().candidates(rid,peek=peek)
         inventory = inventory or {}
+        supported = supported or {}
         with self.lock:
             ready = [model for model in route['targets'] if self.health.get(model,{}).get('cooldown_until',0)<=self.clock()
-                     and self.active[model]<route.get('max_concurrency',8) and inventory.get(model,{}).get('available') is not False]
+                     and supported.get(model,True) and inventory.get(model,{}).get('available') is not False
+                     and (route['strategy']!='smart' or self.active[model]<route.get('max_concurrency',8))]
             def score(model):
                 health = self.health.get(model,{})
                 recent = health.get('recent',[])
@@ -39,11 +39,19 @@ class AdaptiveRoutes(RouteManager):
                 elapsed = elapsed if isinstance(elapsed,(int,float)) and math.isfinite(elapsed) else 1000
                 # Balances only gate eligibility; different platforms use different units.
                 return (1+self.active[model]+inventory.get(model,{}).get('active',0))*(1+max(0,elapsed)/1000)/reliability
-            ready.sort(key=score)
+            if route['strategy']=='smart':
+                ready.sort(key=score)
+            elif route['strategy']=='round_robin' and ready:
+                offset = self.cursors[rid] % len(ready)
+                if not peek:
+                    self.cursors[rid] += 1
+                ready = ready[offset:] + ready[:offset]
+            elif route['strategy']=='latency':
+                ready.sort(key=lambda model:self.health.get(model,{}).get('avg_duration_ms',float('inf')))
         return route,ready[:route['retries']+1]
 
     def explain(self, rid, inventory, supported=None):
-        route, targets = self.candidates(rid, inventory, peek=True)
+        route, targets = self.candidates(rid, inventory, peek=True, supported=supported)
         supported = supported or {}
         targets = [t for t in targets if supported.get(t, True)]
         selected = targets[0] if targets else None
@@ -54,7 +62,7 @@ class AdaptiveRoutes(RouteManager):
             state, reason = 'standby', '备用目标'
             if not supported.get(target, True):
                 state, reason = 'protocol', '不支持选定的接口协议'
-            elif route['strategy'] == 'smart' and snapshot.get('available') is False:
+            elif snapshot.get('available') is False:
                 state, reason = 'unavailable', '没有余额和状态均可用的账号'
             elif route['strategy'] == 'smart' and self.active[target] >= route['max_concurrency']:
                 state, reason = 'concurrency', '当前目标并发已满'
@@ -82,10 +90,14 @@ class AdaptiveRoutes(RouteManager):
             with self.lock:
                 self.active[model] = max(0,self.active[model]-1)
 
-    def record(self,target,ok,status,duration_ms,cooldown_seconds,ttft_ms=None):
+    def record(self,target,ok,status,duration_ms,cooldown_seconds,ttft_ms=None,error_category=None):
         with self.lock:
             health = self.health.setdefault(target,{})
             health['recent'] = (health.get('recent',[])+[bool(ok)])[-20:]
+            # Absence/denied quota can be temporary and specific to this model.
+            # Parameter errors belong to the request and must not disable it.
+            if not ok and error_category in {'model_not_found','quota_exhausted'}:
+                health['cooldown_until'] = int(self.clock()) + cooldown_seconds
             if ok and ttft_ms is not None:
                 old = health.get('avg_ttft_ms')
                 health['avg_ttft_ms'] = round(ttft_ms if old is None else old*.8+ttft_ms*.2)

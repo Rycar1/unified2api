@@ -246,7 +246,14 @@ class API:
                 raise HTTPException(400, "请指定带平台前缀的模型")
             requested=data['model']
             if self.aliases:
-                resolved=self.aliases.resolve(requested,self.validation_catalog(requested))
+                # Route targets were validated when saved; quota-dependent
+                # catalogs can hide them later. Only trust our internal scope,
+                # never a header/body flag, and leave alias checks unchanged.
+                chain=scope.get('unified_route_chain',())
+                route_target=scope.get('unified_route_target')
+                configured_target=bool(chain and route_target==requested and self.routes
+                    and requested in self.routes.get(chain[-1])['targets'])
+                resolved=self.aliases.resolve(requested,self.validation_catalog(requested),allow_unlisted=configured_target)
                 if resolved!=requested:
                     from .diagnostics import CURRENT_TRACE
                     trace=CURRENT_TRACE.get()
