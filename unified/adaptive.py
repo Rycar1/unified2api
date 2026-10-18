@@ -10,6 +10,15 @@ class AdaptiveRoutes(RouteManager):
     def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs)
         self.active = defaultdict(int)
+        changed = False
+        for item in self.health.values():
+            if item.get('last_status') in {200,201,401,402,403,408,409,429,500,502,503,504} and item.get('last_error_category')!='model_not_found':
+                until = item.get('cooldown_until',0)
+                if until>self.clock()+10:
+                    item['cooldown_until'] = int(self.clock())+10
+                    changed = True
+        if changed:
+            self.config.set('route_health',self.health)
 
     def validate(self,value,existing_models,current_id=None):
         smart = isinstance(value,dict) and value.get('strategy')=='smart'
@@ -90,9 +99,19 @@ class AdaptiveRoutes(RouteManager):
             with self.lock:
                 self.active[model] = max(0,self.active[model]-1)
 
-    def record(self,target,ok,status,duration_ms,cooldown_seconds,ttft_ms=None,error_category=None):
+    def record(self,target,ok,status,duration_ms,cooldown_seconds,ttft_ms=None,error_category=None,outcome=None):
+        # An incomplete transport observation does not establish an upstream
+        # fault. Keep its request log, but do not poison channel eligibility.
+        if not ok and outcome=='interrupted':
+            return
+        if not ok and error_category!='model_not_found':
+            # Pools already cool/disable individual failing accounts. A single
+            # account's throttle must not lock all other funded accounts out.
+            cooldown_seconds = min(cooldown_seconds,10)
         with self.lock:
             health = self.health.setdefault(target,{})
+            health['last_error_category'] = error_category if not ok else None
+            health['last_outcome'] = outcome
             health['recent'] = (health.get('recent',[])+[bool(ok)])[-20:]
             # Absence/denied quota can be temporary and specific to this model.
             # Parameter errors belong to the request and must not disable it.

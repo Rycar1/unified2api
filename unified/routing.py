@@ -1,5 +1,6 @@
 """Provider dispatch and adaptive failover; never replay an emitted answer."""
 import asyncio
+from collections import Counter
 from contextlib import nullcontext
 import json
 import os
@@ -143,7 +144,17 @@ async def route_dispatch(api,rid,scope,receive,send,data):
         route,targets = api.routes.candidates(rid)
         targets = [target for target in targets if supported.get(target,True)]
     if not targets:
-        raise HTTPException(503,'路由没有余额、健康状态和并发均可用的目标')
+        plan = api.routes.explain(rid,by_model,supported) if adaptive else {'items':[]}
+        reasons = dict(Counter(item['state'] for item in plan['items']))
+        labels = {'cooldown':'渠道冷却中','unavailable':'账号池暂不可用',
+                  'concurrency':'并发已满','protocol':'不支持当前接口'}
+        summary = '，'.join(f'{labels.get(key,key)} {count} 个' for key,count in reasons.items())
+        waits = [max(1,int(item['cooldown_until']-api.routes.clock())+1)
+                 for item in plan['items'] if item['state']=='cooldown']
+        retry_after = min(waits) if waits else 10
+        raise HTTPException(503,{'code':'route_temporarily_unavailable','reasons':reasons,
+            'retry_after':retry_after,'message':'路由暂时无可用渠道：'+(summary or '请检查目标配置')+
+            f'。建议 {retry_after} 秒后重试。'})
     trace = CURRENT_TRACE.get()
     if trace:
         trace.smart = route['strategy']=='smart'
@@ -164,7 +175,7 @@ async def route_dispatch(api,rid,scope,receive,send,data):
                  'headers':[(k,v) for k,v in scope['headers'] if k.lower()!=b'content-length']}
         child['headers'].append((b'content-length',str(len(body)).encode()))
         started = time.monotonic()
-        status,ok,error_category = 502,False,None
+        status,ok,error_category,cancelled = 502,False,None,False
         try:
             with api.routes.reserve(target,route) if isinstance(api.routes,AdaptiveRoutes) else nullcontext():
                 if data.get('stream'):
@@ -238,6 +249,9 @@ async def route_dispatch(api,rid,scope,receive,send,data):
                         for event in events:
                             await send(event)
                         return
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         except HTTPException as exc:
             status = exc.status_code
             from .error_diagnosis import classify_error
@@ -247,5 +261,11 @@ async def route_dispatch(api,rid,scope,receive,send,data):
         finally:
             observation = scope['state'].get('last_observation',{})
             args = (target,ok,status,(time.monotonic()-started)*1000,route['cooldown_seconds'])
-            api.routes.record(*args,observation.get('ttft_ms'),error_category=observation.get('error_category') or error_category) if adaptive else api.routes.record(*args)
+            if not cancelled:
+                if adaptive:
+                    api.routes.record(*args,observation.get('ttft_ms'),
+                        error_category=observation.get('error_category') or error_category,
+                        outcome=observation.get('outcome'))
+                else:
+                    api.routes.record(*args)
     raise HTTPException(503,'所有路由目标均不可用')

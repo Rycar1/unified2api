@@ -85,3 +85,24 @@ class Adaptive(unittest.TestCase):
         self.assertEqual(self.routes.get('smart')['targets'],['a/model','b/model'])
         with self.assertRaises(HTTPException):
             self.routes.save({'id':'smart','targets':['a/model','unknown/model']},{'b/model'},'smart')
+
+    def test_client_interruption_does_not_disable_a_channel(self):
+        self.routes.record('a/model',False,200,50,300,outcome='interrupted')
+        self.assertIn('a/model',self.routes.candidates('smart')[1])
+        self.assertNotIn('a/model',self.routes.health)
+
+    def test_rate_limit_only_briefly_cools_channel_and_keeps_account_pool_eligible(self):
+        self.routes.record('a/model',False,429,50,300,error_category='rate_limited')
+        self.assertEqual(self.routes.health['a/model']['cooldown_until'],1010)
+        self.routes.clock=lambda:1011
+        self.assertIn('a/model',self.routes.candidates('smart',{'a/model':{'available':True}})[1])
+
+    def test_upgrade_shortens_legacy_soft_cooldowns_but_preserves_missing_model_backoff(self):
+        self.routes.config.set('route_health',{
+            'a/model':{'last_status':200,'cooldown_until':1300},
+            'b/model':{'last_status':429,'cooldown_until':1300},
+            'c/model':{'last_status':400,'cooldown_until':1300}})
+        routes=AdaptiveRoutes(self.routes.config,clock=lambda:1000)
+        self.assertEqual(routes.health['a/model']['cooldown_until'],1010)
+        self.assertEqual(routes.health['b/model']['cooldown_until'],1010)
+        self.assertEqual(routes.health['c/model']['cooldown_until'],1300)

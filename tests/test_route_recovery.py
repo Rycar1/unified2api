@@ -89,6 +89,30 @@ class RouteRecovery(unittest.IsolatedAsyncioTestCase):
                 await self.invoke('route/recover',stream)
                 self.assertEqual(self.calls,['temporarily-hidden'])
 
+    async def test_all_cooling_error_explains_cooldown_instead_of_claiming_no_balance(self):
+        self.routes.record('trae/temporarily-hidden',False,429,10,300)
+        self.routes.record('trae/backup',False,429,10,300)
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as e:
+            await self.api.route_request('recover',{'path':'/v1/chat/completions','headers':[]},None,None,{'model':'route/recover'})
+        self.assertEqual(e.exception.detail['code'],'route_temporarily_unavailable')
+        self.assertEqual(e.exception.detail['reasons'],{'cooldown':2})
+        self.assertNotIn('余额',e.exception.detail['message'])
+
+    async def test_cancelled_stream_does_not_poison_channel_health(self):
+        entered=asyncio.Event()
+        async def stream(scope,receive,send,body):
+            await send({'type':'http.response.start','status':200,'headers':[(b'content-type',b'text/event-stream')]})
+            await send({'type':'http.response.body','body':b'data: {"choices":[{"delta":{"content":"OK"}}]}\n\n','more_body':True})
+            entered.set()
+            await asyncio.Event().wait()
+        self.api.stream_native=stream
+        task=asyncio.create_task(self.invoke('route/recover',True))
+        await entered.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):await task
+        self.assertNotIn('trae/temporarily-hidden',self.routes.health)
+
 
 class InventoryRecovery(unittest.IsolatedAsyncioTestCase):
     async def test_parallel_requests_share_snapshot_and_cancellation_is_isolated(self):
