@@ -169,7 +169,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				h.cfg.Pool.Release(heldUID)
 				heldUID = ""
 			}
-			acct = h.cfg.Pool.PickReserved(tried, limit)
+			acct = h.cfg.Pool.PickReserved(tried, limit, r.URL.Query().Get("_unified_account_id"))
 			if acct != nil {
 				heldUID = acct.UID
 			}

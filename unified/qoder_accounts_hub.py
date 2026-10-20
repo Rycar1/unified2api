@@ -313,8 +313,12 @@ class QoderAccounts(QoderRelay):
 
     async def chat_chunks(self, chat):
         target = realm(chat.get("qoder_region"))
+        from .account_target import requested_account
+        selected=requested_account('qoder-cn' if target=='cn' else 'qoder')
         candidates = []
         for account in list(self.pool.accounts):
+            if selected and self.account_id(account)!=selected:
+                continue
             if account.realm != target or not account.enabled or account.cooldown_until > time.time():
                 continue
             rows = self.model_rows(account)

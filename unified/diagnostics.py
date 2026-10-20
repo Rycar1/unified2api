@@ -19,6 +19,8 @@ ATTEMPT_FIELDS = {'kind','model','provider','account_id','account_name','status'
 
 
 def note_account(provider, account_id, name=''):
+    from .account_target import confirm_account
+    confirm_account(provider,account_id)
     trace = CURRENT_TRACE.get()
     if trace and trace.attempts:
         trace.attempts[-1].update(provider=provider,account_id=str(account_id)[:80],account_name=str(name)[:60])

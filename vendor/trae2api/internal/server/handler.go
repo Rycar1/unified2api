@@ -459,7 +459,7 @@ func (h *Handler) executeWorkRequest(w http.ResponseWriter, r *http.Request, bod
 				h.cfg.Pool.Release(workHeldUID)
 				workHeldUID = ""
 			}
-			acct = h.cfg.Pool.PickReserved(tried, limit, true)
+			acct = h.cfg.Pool.PickReserved(tried, limit, true, r.URL.Query().Get("_unified_account_id"))
 			if acct != nil {
 				workHeldUID = acct.UID
 			}
@@ -628,7 +628,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				h.cfg.Pool.Release(heldUID)
 				heldUID = ""
 			}
-			acct = h.cfg.Pool.PickReserved(tried, limit, false)
+			acct = h.cfg.Pool.PickReserved(tried, limit, false, r.URL.Query().Get("_unified_account_id"))
 		}
 		if acct == nil {
 			break

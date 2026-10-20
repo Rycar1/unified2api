@@ -358,7 +358,10 @@ class AntigravityAccounts(QoderRelay):
                     if affinity and affinity != record[1]: raise HTTPException(400, '工具调用来自不同的 Antigravity 账号，请开始新会话')
                     affinity = record[1]
                     if record[2]: call['extra_content'] = {'google': {'thought_signature': record[2]}}
+        from .account_target import requested_account
+        selected=requested_account('antigravity')
         eligible = [r for r in self.rows if r['enabled'] and not r.get('invalid')
+            and (not selected or r['id']==selected)
             and (not r.get('models') or any(m['id']=='antigravity/'+mid for m in r['models']))
             and (not affinity or r['id']==affinity)]
         candidates = [r for r in eligible if r.get('model_cooldowns',{}).get(mid,0)<=now]

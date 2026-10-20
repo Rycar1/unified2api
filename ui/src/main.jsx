@@ -51,6 +51,7 @@ import { useTheme, ThemeToggle } from './theme'
 import './theme.css'
 import { Dashboard } from './dashboard'
 import { uniqueModels } from './model-list'
+import { AccountProbeDialog } from './account-probe'
 import { NetworkPanel, RoutePlanDialog, ConnectionPoolDialog } from './operations'
 import { ProxySettingsPanel } from './proxy-settings'
 import { AutomationCenter } from './automation-plans'
@@ -827,7 +828,7 @@ function accountEndpoint(account, suffix = '') {
   return `unified/${account.provider}/accounts/${id}${suffix}`
 }
 
-function AccountRowActions({ account, csrf, onRefresh, onFeedback, onDetails }) {
+function AccountRowActions({ account, csrf, onRefresh, onFeedback, onDetails, onTest }) {
   const [more, setMore] = useState(false)
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
   const [busy, setBusy] = useState('')
@@ -941,6 +942,9 @@ function AccountRowActions({ account, csrf, onRefresh, onFeedback, onDetails }) 
       {more &&
         createPortal(
           <div ref={menu} className="account-popover" style={menuPosition} role="menu">
+            <button role="menuitem" onClick={() => { setMore(false); onTest(account) }} disabled={account.enabled===false}>
+              测试调用
+            </button>
             <button
               role="menuitem"
               onClick={() => {
@@ -969,6 +973,7 @@ function Accounts({ data, csrf, onRefresh, onAdd, onImport }) {
   const [checkingIn, setCheckingIn] = useState(false)
   const [feedback, setFeedback] = useState(null)
   const [details, setDetails] = useState(null)
+  const [testAccount, setTestAccount] = useState(null)
   const rows = useMemo(
     () =>
       (data?.accounts || []).filter(
@@ -1079,6 +1084,7 @@ function Accounts({ data, csrf, onRefresh, onAdd, onImport }) {
                       onRefresh={onRefresh}
                       onFeedback={showFeedback}
                       onDetails={setDetails}
+                      onTest={setTestAccount}
                     />
                   </td>
                 </tr>
@@ -1093,6 +1099,7 @@ function Accounts({ data, csrf, onRefresh, onAdd, onImport }) {
         </DataTable>
       }
       {details && <QuotaDialog account={details} request={request} Modal={Modal} onClose={() => setDetails(null)} />}
+      {testAccount && <AccountProbeDialog account={testAccount} models={data?.models || []} csrf={csrf} request={request} Modal={Modal} onClose={() => setTestAccount(null)} />}
     </section>
   )
 }

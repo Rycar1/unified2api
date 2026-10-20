@@ -1,0 +1,8 @@
+.account-probe-scope{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--primary-light);color:var(--ink)}
+.account-probe-scope>svg{color:var(--primary);flex-shrink:0;margin-top:2px}.account-probe-scope p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.6}
+.account-probe-form{margin-top:16px}.account-probe-form .button{margin-top:20px;gap:8px}.account-probe-wait{margin-top:12px}
+.account-probe-result{margin-top:18px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.account-probe-result header{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.account-probe-result header>span{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--muted)}
+.account-probe-result.success header>svg{color:#299271}.account-probe-result.error header>svg{color:#d26a65}.account-probe-result p{margin:9px 0;font-size:11px;overflow-wrap:anywhere}
+.account-probe-result pre{margin:12px 0 0;max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 var(--font-mono,monospace);color:var(--ink)}
+.probe-spinner{animation:probe-spin 1s linear infinite}@keyframes probe-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.probe-spinner{animation:none}}

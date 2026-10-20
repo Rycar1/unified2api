@@ -38,3 +38,25 @@ func TestReservedNeverExceedsAccountLimit(t *testing.T) {
 		t.Fatal("known exhausted account admitted")
 	}
 }
+
+func TestPinnedReservationNeverFallsBack(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "a"})
+	p.Add(&auth.Auth{UID: "b"})
+	for _, work := range []bool{false, true} {
+		got := p.PickReserved(nil, 1, work, "b")
+		if got == nil || got.UID != "b" {
+			t.Fatal("did not select pinned account")
+		}
+		if p.PickReserved(nil, 1, work, "b") != nil {
+			t.Fatal("busy pin fell back to another account")
+		}
+		p.Release("b")
+		if p.PickReserved(map[string]bool{"b": true}, 1, work, "b") != nil {
+			t.Fatal("failed pin fell back")
+		}
+	}
+	if p.PickReserved(nil, 1, false, "missing") != nil {
+		t.Fatal("unknown pin fell back")
+	}
+}

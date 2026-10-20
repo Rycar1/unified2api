@@ -80,6 +80,8 @@ async def dispatch(api,provider,scope,receive,send,body):
     async def observe(message):
         observation.feed(message)
         account = state.get('selected_account')
+        if account:
+            note_account(provider,account['id'],account.get('name',''))
         if account and span is not None:
             span.update(account_id=account['id'],account_name=account.get('name',''))
         await send(message)

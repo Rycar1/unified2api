@@ -488,12 +488,15 @@ func (p *Pool) PickWorkExcluding(tried map[string]bool) *auth.Auth {
 
 // PickReserved atomically selects and reserves a smart-route account.
 // Saturated accounts are never used as a fallback for this strategy.
-func (p *Pool) PickReserved(tried map[string]bool, limit int, work bool) *auth.Auth {
+func (p *Pool) PickReserved(tried map[string]bool, limit int, work bool, only ...string) *auth.Auth {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
 	var best *entry
 	for uid, e := range p.byUID {
+		if len(only) > 0 && only[0] != "" && uid != only[0] {
+			continue
+		}
 		if tried[uid] || e.inFlight >= limit {
 			continue
 		}

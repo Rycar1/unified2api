@@ -107,12 +107,14 @@ class AccountPool:
             row["inflight"] = self.active.get(row["id"],0)
         return rows
 
-    def select(self, smart=False, max_concurrency=2):
+    def select(self, smart=False, max_concurrency=2, account_id=None):
         with self.store.lock:
             candidates = [row for row in self.store.account_rows() if self.state(row) == "available"]
-            if self.store.data["pool"]["routing"] == "manual":
+            if account_id is not None:
+                candidates = [row for row in candidates if row['id']==account_id]
+            if account_id is None and self.store.data["pool"]["routing"] == "manual":
                 candidates = [row for row in candidates if row["id"] == self.store.data["active"]]
-            if smart:
+            if smart or account_id is not None:
                 candidates = [row for row in candidates if self.active.get(row["id"],0)<max_concurrency]
             if not candidates:
                 raise HTTPException(503, "暂无可用账号：请检查暂停、积分、冷却或登录状态")
@@ -305,9 +307,11 @@ class PoolMiddleware:
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers", []))
         leased_aid = None
+        target=scope.get('state',{}).get('account_test')
+        selection={'account_id':target['account_id']} if target and target['provider']=='codebuddy' else {}
         try:
             self.pool.store.check_api(headers.get(b"authorization", b"").decode(), headers.get(b"x-api-key", b"").decode())
-            aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2))
+            aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2),**selection)
             leased_aid = aid
             # Refresh before entering a stream; retry another eligible account only
             # if credential preparation fails, never replay a partially emitted response.
@@ -317,6 +321,8 @@ class PoolMiddleware:
                 self.pool.update(aid, cooldown_until=self.pool.clock()+300, last_error="凭据暂不可用，已冷却 5 分钟")
                 self.pool.release(aid)
                 leased_aid = None
+                if selection:
+                    raise HTTPException(503,'指定账号凭据暂不可用，已停止测试，不切换其他账号')
                 aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2))
                 leased_aid = aid
                 try:

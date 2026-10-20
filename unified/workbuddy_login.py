@@ -122,6 +122,10 @@ class WorkBuddyLogin:
                "base_url": self.hub_url + "/v1", "key": self.api_key, "enabled": True}
         from .diagnostics import CURRENT_TRACE, note_account
         trace = CURRENT_TRACE.get()
+        from .account_target import requested_account
+        selected=requested_account('workbuddy')
+        if selected:
+            return await self.connections.relay_row({**row,'account_uid':selected},path,body,scope,receive,send)
         if trace and trace.smart:
             if not hasattr(self,"active"):
                 self.active = {}

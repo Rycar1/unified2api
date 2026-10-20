@@ -177,11 +177,14 @@ func (p *Pool) PickExcluding(exclude map[string]bool) *cred.Account {
 }
 
 // PickReserved atomically selects a healthy account with an available slot.
-func (p *Pool) PickReserved(exclude map[string]bool, limit int) *cred.Account {
+func (p *Pool) PickReserved(exclude map[string]bool, limit int, only ...string) *cred.Account {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var best *entry
 	for _, e := range p.order {
+		if len(only) > 0 && only[0] != "" && e.c.UID != only[0] {
+			continue
+		}
 		if exclude[e.c.UID] || !e.healthy(time.Now()) || e.inFlight >= limit {
 			continue
 		}

@@ -169,7 +169,11 @@ class API:
         from urllib.parse import parse_qsl, urlencode
         from .diagnostics import CURRENT_TRACE
         parameters = [(key,value) for key,value in parse_qsl(scope.get("query_string",b"").decode())
-                      if key!="_unified_account_limit"]
+                      if key not in {"_unified_account_limit","_unified_account_id"}]
+        target=scope.get('state',{}).get('account_test')
+        if target:
+            parameters.append(('_unified_account_id',target['account_id']))
+            parameters.append(('_unified_account_limit','1'))
         trace = CURRENT_TRACE.get()
         if trace and trace.smart:
             parameters.append(("_unified_account_limit",str(trace.max_account_concurrency)))
@@ -500,6 +504,10 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         body = await body_json(req)
         if not isinstance(body.get("model"), str) or not isinstance(body.get("message"), str) or not 1 <= len(body["message"].strip()) <= 16000:
             raise HTTPException(400, "请选择模型并输入不超过 16000 字符的消息")
+        from .account_target import CURRENT_ACCOUNT,validate_target
+        selection=None
+        if 'account_id' in body or 'account_provider' in body:
+            selection=await validate_target(api,store,body.get('account_provider'),body.get('account_id'),body['model'])
         key = secrets.token_urlsafe(32)
         error_secrets = [key]
         provider = body["model"].partition("/")[0]
@@ -507,8 +515,22 @@ def create_app(native=None, buddy=None, qoder_transport=None):
             error_secrets.append(connections.get(provider)["key"])
         with store.lock:
             store.test_keys.add(digest(key))
+        target_token=CURRENT_ACCOUNT.set(selection)
+        started=time.monotonic()
+        async def test_app(scope,receive,send):
+            if selection:
+                scope={**scope,'state':{**scope.get('state',{}),'account_test':{
+                    'provider':selection.provider,'account_id':selection.account_id}}}
+            await result(scope,receive,send)
+        def outcome(value):
+            if selection:
+                value.update(account_id=selection.account_id,account_provider=body['account_provider'],
+                    account_confirmed=selection.confirmed,duration_ms=round((time.monotonic()-started)*1000),model=body['model'])
+                if value.get('ok') and not selection.confirmed:
+                    value.update(ok=False,error='上游未确认使用指定账号，测试结果不计为成功')
+            return value
         try:
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=result), base_url="http://internal") as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_app), base_url="http://internal") as client:
                 response = await asyncio.wait_for(client.post("/v1/chat/completions",
                     headers={"Authorization": "Bearer " + key}, json={"model": body["model"],
                     "messages": [{"role": "user", "content": body["message"]}], "max_tokens": 1024, "stream": False}), 150)
@@ -517,20 +539,21 @@ def create_app(native=None, buddy=None, qoder_transport=None):
                 except ValueError:
                     data = response.text
                 if response.status_code >= 400:
-                    return {"ok": False, "error": safe_error_message(data, response.status_code, secrets=error_secrets), "status": response.status_code}
+                    return outcome({"ok": False, "error": safe_error_message(data, response.status_code, secrets=error_secrets), "status": response.status_code})
                 if not isinstance(data, dict) or data.get("error"):
-                    return {"ok": False, "error": safe_error_message(data, response.status_code, secrets=error_secrets), "status": response.status_code}
+                    return outcome({"ok": False, "error": safe_error_message(data, response.status_code, secrets=error_secrets), "status": response.status_code})
                 choices = data.get("choices") or []
                 message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
                 answer = message.get("content") if isinstance(message, dict) else None
                 if not isinstance(answer, str):
                     answer = None
-                return {"ok": bool(answer), "answer": answer, "error": None if answer else "未返回正文，请检查模型权限或生成预算。"}
+                return outcome({"ok": bool(answer), "answer": answer, "status":response.status_code, "error": None if answer else "未返回正文，请检查模型权限或生成预算。"})
         except asyncio.TimeoutError:
-            return {"ok": False, "error": "调用超时（150 秒），请检查平台任务状态或稍后重试。"}
+            return outcome({"ok": False, "status":504,"error": "调用超时（150 秒），请检查平台任务状态或稍后重试。"})
         except (ValueError, httpx.HTTPError) as exc:
-            return {"ok": False, "error": safe_error_message({"detail": str(exc) or type(exc).__name__}, 502, secrets=error_secrets)}
+            return outcome({"ok": False,"status":502, "error": safe_error_message({"detail": str(exc) or type(exc).__name__}, 502, secrets=error_secrets)})
         finally:
+            CURRENT_ACCOUNT.reset(target_token)
             with store.lock:
                 store.test_keys.discard(digest(key))
 
