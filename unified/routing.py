@@ -7,7 +7,7 @@ import os
 import time
 from urllib.parse import quote
 from fastapi import HTTPException
-from .adaptive import AdaptiveRoutes, availability
+from .adaptive import AdaptiveRoutes, availability, model_inventory
 from .diagnostics import CURRENT_TRACE, ResponseObservation, note_account
 
 
@@ -68,12 +68,89 @@ async def refresh_inventory(api):
 
 
 async def dispatch(api,provider,scope,receive,send,body):
+    if provider=='workbuddy' and not scope.get('state',{}).get('account_test') and hasattr(api.workbuddy,'routing_accounts'):
+        return await workbuddy_dispatch(api,scope,receive,send,body)
+    pool=getattr(getattr(getattr(api,'buddy',None),'state',None),'pool',None)
+    if provider!='codebuddy' or pool is None or scope.get('state',{}).get('account_test'):
+        return await dispatch_once(api,provider,scope,receive,send,body)
+    from .account_retry import hold_rate_limit,emit_events
+    state=scope.setdefault('state',{})
+    tried=set();last=None
+    model=json.loads(body).get('model','')
+    state['account_model']=model
+    try:
+        while True:
+            state['account_exclude']=tried.copy()
+            if last:
+                with pool.store.lock:
+                    rows=[r for r in pool.store.account_rows() if r['id'] not in tried and pool.state(r,model)=='available']
+                    if pool.store.data['pool']['routing']=='manual':
+                        rows=[r for r in rows if r['id']==pool.store.data['active']]
+                if not rows: return await emit_events(last,send)
+            async def forward(emit):
+                return await dispatch_once(api,provider,scope,receive,emit,body)
+            held=await hold_rate_limit(forward,send,scope['path'])
+            if held is None: return
+            aid=state.get('selected_account',{}).get('id')
+            if not aid or aid in tried: return await emit_events(held,send)
+            tried.add(aid);last=held
+            api.inventory_cache=None
+    finally:
+        state.pop('account_exclude',None)
+        state.pop('account_model',None)
+
+
+async def workbuddy_dispatch(api,scope,receive,send,body):
+    from .account_retry import hold_rate_limit,emit_events
+    wb=api.workbuddy;tried=set();last=None;last_error=None
+    state=scope.setdefault('state',{});payload=json.loads(body);model=payload.get('model','')
+    metadata=payload.get('metadata') if isinstance(payload.get('metadata'),dict) else {}
+    session=payload.get('conversation_id') or payload.get('session_id') or metadata.get('conversation_id')
+    session=str(session).strip() if session else None
+    limit=state.get('max_account_concurrency',2)
+    try:
+        while True:
+            ready,positions=await wb.routing_accounts(model,tried,limit,session)
+            if not ready:
+                if last is not None:return await emit_events(last,send)
+                if last_error:raise last_error
+                raise HTTPException(503,'WorkBuddy 此模型暂无可用账号：请查看路由计划中的冷却、额度和并发状态')
+            account=ready[0];aid=account['id'];tried.add(aid)
+            wb.route_cursor=positions[aid]+1
+            state['account_route_id']=aid
+            wb.active[aid]=wb.active.get(aid,0)+1
+            async def forward(emit):
+                return await dispatch_once(api,'workbuddy',scope,receive,emit,body)
+            try:
+                held=await hold_rate_limit(forward,send,scope['path'])
+                if held is None:
+                    if state.get('last_observation',{}).get('ok'):
+                        wb.sunk_until.pop(aid,None)
+                        runtime=getattr(wb,'runtime',None)
+                        if session and runtime and runtime.proxy:runtime.proxy.POOL.affinity.bind(session,aid)
+                    return
+                last=held
+            except HTTPException as exc:
+                if exc.status_code!=429 or getattr(exc,'account_response_started',False):raise
+                last_error=exc
+            finally:
+                wb.active[aid]=max(0,wb.active.get(aid,0)-1)
+            wb.record_route_limit(aid,model,account.get('remaining'))
+            api.inventory_cache=None
+    finally:
+        state.pop('account_route_id',None)
+
+
+async def dispatch_once(api,provider,scope,receive,send,body):
     state = scope.setdefault('state',{})
+    if provider=='codebuddy': state['account_model']=json.loads(body).get('model','')
     state.pop('selected_account',None)
     trace = CURRENT_TRACE.get()
     parsed = json.loads(body)
     full_model = provider+'/'+parsed.get('model','')
     span = trace.begin(full_model) if trace else None
+    if provider=='workbuddy' and state.get('account_route_id'):
+        note_account(provider,state['account_route_id'])
     observation = ResponseObservation(scope['path'])
     if trace:
         trace.current_response = observation
@@ -132,7 +209,7 @@ async def route_dispatch(api,rid,scope,receive,send,data):
     route = api.routes.get(rid)
     adaptive = isinstance(api.routes,AdaptiveRoutes)
     snapshot = await inventory(api) if adaptive else {}
-    by_model = {target:snapshot.get(target.partition('/')[0],{}) for target in route['targets']}
+    by_model = {target:model_inventory(snapshot,target) for target in route['targets']}
     supported = {}
     capabilities = getattr(api,'capabilities',None)
     if capabilities and scope['path']!='/v1/responses/compact':

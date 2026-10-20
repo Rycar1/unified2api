@@ -2,7 +2,7 @@
 import json
 import re
 
-CODES = {'11102':'model_not_found','11128':'channel_verification','11133':'parameters','6004':'quota_exhausted'}
+CODES = {'11102':'model_not_found','11128':'channel_verification','11133':'parameters','6004':'quota_exhausted','429':'rate_limited'}
 TEXT_CODES = {'model_not_found':'model_not_found','model_alias_disabled':'alias_disabled','model_alias_conflict':'alias_conflict',
               'route_cycle':'route_configuration',
               'context_length_exceeded':'context_length','invalid_request_error':'parameters',

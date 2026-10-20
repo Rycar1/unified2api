@@ -132,6 +132,28 @@ def availability(rows):
     candidates = [{'id':row.get('id',row.get('uid','')), 'name':row.get('name') or row.get('nickname') or row.get('uid',''),
                    'status':row.get('status',row.get('pool_state','unknown')), 'enabled':row.get('enabled',True),
                    'available':row in ready, 'remaining':row.get('remaining'),
+                   'model_cooldowns':row.get('model_cooldowns',{}),
+                   'sunk_until':row.get('sunk_until',0),'cooldown_until':row.get('cooldown_until',0),
                    'active':row.get('inflight',row.get('in_flight',0))} for row in rows]
     return {'available':bool(ready),'accounts':len(ready),'active':sum(row.get('inflight',row.get('in_flight',0)) for row in ready),
             'candidates':candidates}
+
+
+def model_inventory(snapshot,target,now=None):
+    """Apply model windows to a cached platform snapshot at query time."""
+    import time
+    now=time.time() if now is None else now
+    source=snapshot.get(target.partition('/')[0],{})
+    if 'candidates' not in source:return source
+    model=target.partition('/')[2];rows=[]
+    for candidate in source['candidates']:
+        row=dict(candidate)
+        deadline=(row.get('model_cooldowns') or {}).get(model,0)
+        if deadline>now and row.get('status') not in {'paused','invalid','expired','exhausted'}:
+            row.update(available=False,status='cooling',cooldown_until=max(deadline,row.get('cooldown_until') or 0),reason='此模型受到上游限流')
+        elif row.get('available') and row.get('sunk_until',0)>now:
+            row['reason']='暂时降低优先级，仍可参与分配'
+        rows.append(row)
+    ready=[r for r in rows if r['available']]
+    return {**source,'candidates':rows,'available':bool(ready),'accounts':len(ready),
+            'active':sum(r.get('active',0) for r in ready)}

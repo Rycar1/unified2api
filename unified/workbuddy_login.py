@@ -21,6 +21,10 @@ class WorkBuddyLogin:
         self.panel_token = None
         self.panel_lock = asyncio.Lock()
         self.flows = {}
+        self.active = {}
+        self.route_limits = {}
+        self.sunk_until = {}
+        self.route_cursor = 0
 
     async def _panel_login(self):
         async with self.panel_lock:
@@ -91,8 +95,43 @@ class WorkBuddyLogin:
                          "remaining": remaining if isinstance(remaining, (int, float)) else None,
                          "inflight": getattr(self,"active",{}).get(account["uid"],0),
                          "expires_at": expiry * 1000 if isinstance(expiry, (int, float)) and expiry < 100000000000 else expiry or 0,
-                         "last_error": account.get("lastError") or ""})
+                         "last_error": account.get("lastError") or "",
+                         "model_cooldowns":{**self.route_limits.get(account['uid'],{}),
+                             **{r['model']:r['expiresAt'] for r in account.get('modelCooldowns',[]) if isinstance(r,dict) and 'model' in r and 'expiresAt' in r}},
+                         "sunk_until":self.sunk_until.get(account['uid'],0),
+                         "cooldown_until":time.time()+(account.get('cooldownFor') or 0) if account.get('inCooldown') else 0})
         return rows
+
+    async def routing_accounts(self,model,excluded,limit=2,session=None):
+        now=time.time()
+        rows=await self.public_accounts()
+        positions={r['id']:i for i,r in enumerate(rows)}
+        ready=[r for r in rows if r['enabled'] and r['status']=='ready' and r['remaining']!=0
+               and r['id'] not in excluded and r['model_cooldowns'].get(model,0)<=now
+               and self.active.get(r['id'],0)<limit]
+        ready.sort(key=lambda r:(positions[r['id']]-self.route_cursor)%max(1,len(rows)))
+        runtime=getattr(self,'runtime',None)
+        warm=runtime.proxy.POOL.affinity.recent(session) if session and runtime and runtime.proxy else []
+        def score(row):
+            policy=getattr(self,'credit_policy',None)
+            preference=policy.priority(row) if policy else (1,float('inf'))
+            return row.get('sunk_until',0)>now,warm.index(row['id']) if row['id'] in warm else len(warm),self.active.get(row['id'],0),preference
+        ready.sort(key=score)
+        return ready,positions
+
+    def record_route_limit(self,aid,model,balance=None):
+        now=time.time();until=now+60
+        # Keep the embedded runtime's verified upstream reset time. Never clear
+        # a real quota window simply to make another request possible.
+        runtime=getattr(self,'runtime',None)
+        account=runtime.proxy.POOL.get(aid) if runtime and runtime.proxy else None
+        if account:
+            until=max(until,account.model_cooldowns.get(model,0),account.cooldown_until)
+        limits=self.route_limits.setdefault(aid,{})
+        limits[model]=max(limits.get(model,0),until)
+        remaining=account.credits.get('remain') if account and isinstance(account.credits,dict) else balance
+        if isinstance(remaining,(int,float)) and remaining>0:
+            self.sunk_until[aid]=now+1800
 
     async def models(self):
         if not any(a.get("enabled") for a in await self.accounts()):
@@ -124,6 +163,7 @@ class WorkBuddyLogin:
         trace = CURRENT_TRACE.get()
         from .account_target import requested_account
         selected=requested_account('workbuddy')
+        selected=selected or scope.get('state',{}).get('account_route_id')
         if selected:
             return await self.connections.relay_row({**row,'account_uid':selected},path,body,scope,receive,send)
         if trace and trace.smart:

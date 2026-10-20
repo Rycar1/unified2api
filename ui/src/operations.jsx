@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Activity, KeyRound, Plus, RefreshCw, Save, Trash2, WalletCards } from 'lucide-react'
 import './operations.css'
 
@@ -119,7 +120,7 @@ export function RoutePlanDialog({ route, request, Modal, onClose }) {
   useEffect(() => {
     load()
   }, [route.id, protocol])
-  return (
+  return createPortal(
     <Modal title="路由预览" subtitle={`route/${route.id}`} onClose={onClose}>
       <div className="operations-toolbar">
         <label htmlFor="plan-protocol">
@@ -173,7 +174,7 @@ export function RoutePlanDialog({ route, request, Modal, onClose }) {
                           <span className={`candidate-dot ${account.available ? 'ready' : ''}`} />
                           <strong>{account.name || account.id}</strong>
                           <small>
-                            {account.available
+                            {account.reason || (account.available
                               ? '可参与分配'
                               : {
                                   paused: '已停用',
@@ -182,7 +183,8 @@ export function RoutePlanDialog({ route, request, Modal, onClose }) {
                                   busy: '并发已满',
                                   invalid: '凭据异常',
                                   expired: '已过期',
-                                }[account.status] || '当前不可用'}
+                                }[account.status] || '当前不可用')}
+                            {account.cooldown_until * 1000 > Date.now() && ` · 恢复于 ${timeText(account.cooldown_until)}`}
                           </small>
                         </div>
                       ))}
@@ -193,7 +195,7 @@ export function RoutePlanDialog({ route, request, Modal, onClose }) {
           </ol>
         </>
       )}
-    </Modal>
+    </Modal>, document.body
   )
 }
 

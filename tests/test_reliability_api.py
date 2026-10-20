@@ -19,7 +19,7 @@ class ReliabilityAPI(unittest.IsolatedAsyncioTestCase):
         self.app=create_app(native=Native(),buddy=buddy)
         wb=self.app.state.workbuddy_login
         wb.models=AsyncMock(return_value=[{'id':'workbuddy/glm-5.3-flash','owned_by':'workbuddy'}])
-        wb.accounts=AsyncMock(return_value=[])
+        wb.accounts=AsyncMock(return_value=[{'uid':'synthetic-wb','enabled':True,'realm':'intl','credits':{'remain':50}}])
         self.sent=[]
         async def relay(path,body,scope,receive,send):
             self.sent.append(json.loads(body)['model'])
@@ -92,7 +92,7 @@ class ReliabilityAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get(self.root+'/credit-policy/expiring')).json()['items'],[])
 
     async def test_alias_to_route_cannot_become_a_recursive_route_target(self):
-        self.app.state.workbuddy_login.public_accounts=AsyncMock(return_value=[{'id':'synthetic','remaining':10}])
+        self.app.state.workbuddy_login.public_accounts=AsyncMock(return_value=[{'id':'synthetic','remaining':10,'enabled':True,'status':'ready','model_cooldowns':{}}])
         route={'id':'stable','targets':['workbuddy/glm-5.3-flash']}
         self.assertEqual((await self.client.post(self.root+'/routes',headers=self.csrf,json=route)).status_code,200)
         self.assertEqual((await self.client.post(self.root+'/model-aliases',headers=self.csrf,json={'id':'alias/stable','target':'route/stable'})).status_code,200)

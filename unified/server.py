@@ -845,10 +845,10 @@ def create_app(native=None, buddy=None, qoder_transport=None):
         store.require_admin(req)
         if protocol not in {'chat', 'responses', 'messages', 'compact'}:
             raise HTTPException(400, '不支持的接口协议')
-        from .routing import inventory
+        from .routing import inventory,model_inventory
         route = routes.get(rid)
         snapshot = await inventory(api)
-        by_model = {target: snapshot.get(target.partition('/')[0], {}) for target in route['targets']}
+        by_model = {target: model_inventory(snapshot,target) for target in route['targets']}
         supported = {}
         for target in route['targets']:
             cap = capabilities.describe({'id': target})

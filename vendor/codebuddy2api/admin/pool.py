@@ -2,11 +2,13 @@
 import asyncio
 import json
 import math
+import re
 import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 
 import httpx
 from fastapi import HTTPException
@@ -15,6 +17,23 @@ from fastapi.responses import JSONResponse
 REQUEST_CREDENTIAL = ContextVar("pool_credential", default=None)
 CN = timezone(timedelta(hours=8))
 BILLING = "https://www.codebuddy.cn/v2/billing/meter/"
+
+
+def rate_delay(value,now,detail=''):
+    """Prefer an explicit provider reset clock, then Retry-After, then 60s."""
+    match=re.search(r'(?:reset at|将在)\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})\s*UTC([+-]\d{1,2})(?::?(\d{2}))?',detail)
+    if match:
+        try:
+            hours=int(match[2]);minutes=int(match[3] or 0)*(1 if hours>=0 else -1)
+            reset=datetime.fromisoformat(match[1]).replace(tzinfo=timezone(timedelta(hours=hours,minutes=minutes))).timestamp()
+            if reset>now:return reset-now
+        except (ValueError,OverflowError):pass
+    if isinstance(value,bytes):value=value.decode('ascii','ignore')
+    try:wait=float(value)
+    except (ValueError,TypeError):
+        try:wait=parsedate_to_datetime(value).timestamp()-now
+        except (ValueError,TypeError,OverflowError,AttributeError):wait=60
+    return wait if math.isfinite(wait) and wait>0 else 60
 
 
 def number(value):
@@ -82,7 +101,7 @@ class AccountPool:
                 self.store.data["account_status"].setdefault(aid, {}).update(values)
                 self.store.save()
 
-    def state(self, row):
+    def state(self, row, model=None):
         status = self.store.data["account_status"].get(row["id"], {})
         if not row["enabled"]:
             return "paused"
@@ -90,6 +109,8 @@ class AccountPool:
             return "invalid"
         if status.get("cooldown_until", 0) > self.clock():
             return "cooling"
+        if model and status.get('model_cooldowns',{}).get(model,0)>self.clock():
+            return 'cooling'
         if status.get("credits_updated", 0) > self.clock() - 600 and status.get("remaining") == 0 and status.get("packages", 0) > 0:
             return "exhausted"
         return "available"
@@ -105,11 +126,14 @@ class AccountPool:
                         "request_count": status.get("request_count", 0)})
             row.update({key:status.get(key) for key in ('credit_expires_at','expiring_credits','credit_fetched_at')})
             row["inflight"] = self.active.get(row["id"],0)
+            row['model_cooldowns']={m:t for m,t in status.get('model_cooldowns',{}).items() if t>self.clock()}
+            row['sunk_until']=status.get('sunk_until',0)
         return rows
 
-    def select(self, smart=False, max_concurrency=2, account_id=None):
+    def select(self, smart=False, max_concurrency=2, account_id=None, model=None, exclude=()):
         with self.store.lock:
-            candidates = [row for row in self.store.account_rows() if self.state(row) == "available"]
+            all_rows=self.store.account_rows()
+            candidates = [row for row in all_rows if self.state(row,model) == "available" and row['id'] not in exclude]
             if account_id is not None:
                 candidates = [row for row in candidates if row['id']==account_id]
             if account_id is None and self.store.data["pool"]["routing"] == "manual":
@@ -118,22 +142,26 @@ class AccountPool:
                 candidates = [row for row in candidates if self.active.get(row["id"],0)<max_concurrency]
             if not candidates:
                 raise HTTPException(503, "暂无可用账号：请检查暂停、积分、冷却或登录状态")
+            positions={row['id']:index for index,row in enumerate(all_rows)}
+            candidates.sort(key=lambda row:(positions[row['id']]-self.cursor)%len(all_rows))
+            def sunk(row):
+                return self.store.data['account_status'].get(row['id'],{}).get('sunk_until',0)>self.clock()
             if smart:
-                candidates = candidates[self.cursor % len(candidates):]+candidates[:self.cursor % len(candidates)]
                 def score(row):
                     status = self.store.data["account_status"].get(row["id"],{})
                     balance = status.get("remaining") if status.get("credits_updated",0)>self.clock()-600 else None
                     preference=self.credit_policy.priority(status) if hasattr(self,'credit_policy') else (1,float('inf'))
-                    return self.active.get(row["id"],0),preference,-(balance if isinstance(balance,(int,float)) else 0)
+                    return sunk(row),self.active.get(row["id"],0),preference,-(balance if isinstance(balance,(int,float)) else 0)
                 candidates.sort(key=score)
                 aid = candidates[0]["id"]
             else:
-                aid = candidates[self.cursor % len(candidates)]["id"]
+                candidates.sort(key=sunk)
+                aid = candidates[0]["id"]
                 if hasattr(self,'credit_policy'):
-                    urgent=[r for r in candidates if self.credit_policy.priority(self.store.data['account_status'].get(r['id'],{}))[0]==0]
+                    urgent=[r for r in candidates if sunk(r)==sunk(candidates[0]) and self.credit_policy.priority(self.store.data['account_status'].get(r['id'],{}))[0]==0]
                     if urgent:
                         aid=min(urgent,key=lambda r:(self.active.get(r['id'],0),self.credit_policy.priority(self.store.data['account_status'][r['id']])) )['id']
-            self.cursor += 1
+            self.cursor=positions[aid]+1
             self.active[aid] = self.active.get(aid,0)+1
             item = self.store.data["accounts"][aid]
             return aid, self.store.manager_for(aid, item)
@@ -142,7 +170,7 @@ class AccountPool:
         with self.store.lock:
             self.active[aid] = max(0,self.active.get(aid,0)-1)
 
-    def record(self, aid, status=200):
+    def record(self, aid, status=200, model=None, retry_after=None, detail=''):
         with self.store.lock:
             if aid not in self.store.data["accounts"]:
                 return
@@ -151,8 +179,19 @@ class AccountPool:
             data["last_request"] = int(self.clock())
             if status in (401, 403):
                 data.update(cooldown_until=self.clock() + 300, last_error="上游认证或访问被拒绝，已冷却 5 分钟")
-            elif status in (402, 429):
+            elif status==429 and model:
+                wait=rate_delay(retry_after,self.clock(),detail)
+                limits=data.setdefault('model_cooldowns',{})
+                limits[model]=max(limits.get(model,0),self.clock()+wait)
+                data['last_error']='该模型受到上游限流，恢复后自动参与分配'
+                if isinstance(data.get('remaining'),(int,float)) and data['remaining']>0 and data.get('credits_updated',0)>self.clock()-600:
+                    data['sunk_until']=self.clock()+1800
+            elif status in (402,429):
                 data.update(cooldown_until=self.clock() + 1800, last_error="上游额度或频率限制，已冷却 30 分钟")
+            elif 200<=status<300:
+                data.pop('sunk_until',None)
+                if model:
+                    data.get('model_cooldowns',{}).pop(model,None)
             self.store.save()
 
     def billing(self, client, headers, path, body=None):
@@ -309,6 +348,10 @@ class PoolMiddleware:
         leased_aid = None
         target=scope.get('state',{}).get('account_test')
         selection={'account_id':target['account_id']} if target and target['provider']=='codebuddy' else {}
+        state=scope.setdefault('state',{})
+        model=state.get('account_model')
+        if model:
+            selection.update(model=model,exclude=state.get('account_exclude',()))
         try:
             self.pool.store.check_api(headers.get(b"authorization", b"").decode(), headers.get(b"x-api-key", b"").decode())
             aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2),**selection)
@@ -321,9 +364,10 @@ class PoolMiddleware:
                 self.pool.update(aid, cooldown_until=self.pool.clock()+300, last_error="凭据暂不可用，已冷却 5 分钟")
                 self.pool.release(aid)
                 leased_aid = None
-                if selection:
+                if target:
                     raise HTTPException(503,'指定账号凭据暂不可用，已停止测试，不切换其他账号')
-                aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2))
+                selection['exclude']=set(selection.get('exclude',()))|{aid}
+                aid, manager = self.pool.select(scope.get("state",{}).get("smart",False),scope.get("state",{}).get("max_account_concurrency",2),**selection)
                 leased_aid = aid
                 try:
                     await asyncio.to_thread(manager.get_headers)
@@ -347,11 +391,15 @@ class PoolMiddleware:
         scope.setdefault("state",{})["selected_account"] = {"id":aid,"name":self.pool.store.data["accounts"].get(aid,{}).get("name","")}
         status = 200
         buffer = b""
+        retry_after=None
+        error_sample=bytearray()
         async def observe(message):
-            nonlocal status, buffer
+            nonlocal status, buffer, retry_after
             if message["type"] == "http.response.start":
                 status = message["status"]
+                retry_after=dict(message.get('headers',[])).get(b'retry-after')
             if message["type"] == "http.response.body":
+                error_sample.extend(message.get('body',b'')[:65536-len(error_sample)])
                 buffer += message.get("body", b"")
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
@@ -360,8 +408,8 @@ class PoolMiddleware:
                             obj = json.loads(line[5:])
                             err = obj.get("error") or {}
                             code = err.get("code") if isinstance(err, dict) else None
-                            if code in (401, 402, 403, 429):
-                                status = code
+                            if str(code) in ('400','401','402','403','429','6004'):
+                                status = 429 if str(code)=='6004' else int(code)
                         except (ValueError, AttributeError):
                             pass
                 if len(buffer) > 65536:
@@ -372,4 +420,15 @@ class PoolMiddleware:
         finally:
             REQUEST_CREDENTIAL.reset(token)
             self.pool.release(aid)
-            self.pool.record(aid, status)
+            if status<400:
+                try:
+                    obj=json.loads(error_sample)
+                    error=obj.get('error') or {}
+                    code=error.get('code') if isinstance(error,dict) else None
+                    if str(code) in ('400','401','402','403','429','6004'):
+                        status=429 if str(code)=='6004' else int(code)
+                except (ValueError,AttributeError):pass
+            if model:
+                self.pool.record(aid,status,model=model,retry_after=retry_after,detail=error_sample.decode('utf-8','replace') if status==429 else '')
+            else:
+                self.pool.record(aid,status)
