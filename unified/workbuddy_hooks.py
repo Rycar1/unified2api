@@ -3,6 +3,7 @@ import os
 import inspect
 import threading
 from copy import deepcopy
+from .workbuddy_gates import native_gate
 
 _REQUEST=threading.local()
 
@@ -60,13 +61,16 @@ def install(proxy):
     def post(self):
         _REQUEST.forced=self.headers.get('X-Unified-Account-Uid') if os.getenv('WORKBUDDY_EMBEDDED')=='true' else None
         _REQUEST.selected=None
+        _REQUEST.rejected=None
         try: return original_post(self)
-        finally: _REQUEST.forced=None; _REQUEST.selected=None
+        finally: _REQUEST.forced=None; _REQUEST.selected=None; _REQUEST.rejected=None
     handler.do_POST=post
     original_end=handler.end_headers
     def end(self):
         selected=getattr(_REQUEST,'selected',None)
         if selected and os.getenv('WORKBUDDY_EMBEDDED')=='true': self.send_header('X-Unified-Account',selected)
+        rejected=getattr(_REQUEST,'rejected',None)
+        if rejected and os.getenv('WORKBUDDY_EMBEDDED')=='true': self.send_header('X-Unified-Account-Rejection',rejected)
         return original_end(self)
     handler.end_headers=end
     pool_class=proxy.wb_accounts.AccountPool
@@ -87,7 +91,12 @@ def install(proxy):
             bound.apply_defaults()
             realm=bound.arguments.get('realm')
             excluded=bound.arguments.get('exclude') or set()
-            if not account or account.uid in excluded or realm and account.realm!=realm or not account.ready(model=bound.arguments.get('model')):
+            if account and account.uid in excluded:return None
+            if not account or realm and account.realm!=realm:
+                _REQUEST.rejected='account_missing' if not account else 'account_realm'
+                return None
+            if not account.ready(model=bound.arguments.get('model')):
+                _REQUEST.rejected=native_gate(account,bound.arguments.get('model'),refresh_failed=True)
                 return None
         else: account=original_pick(pool,*args,**kwargs)
         if account: _REQUEST.selected=account.uid

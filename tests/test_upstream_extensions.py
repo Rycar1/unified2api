@@ -13,7 +13,10 @@ from unified.features import UnifiedConfig,AutomationManager
 class HookTests(unittest.TestCase):
     def proxy(self,builder=None):
         class Pool:
-            def get(self,uid): return SimpleNamespace(uid=uid,realm='intl',ready=lambda model=None:model!='blocked')
+            def get(self,uid): return SimpleNamespace(uid=uid,realm='intl',enabled=True,access_token='synthetic',
+                ready=lambda model=None:model!='blocked',throttle_wait=lambda model=None:60 if model=='blocked' else 0,
+                reserve_blocked=lambda:False,daily_limit_blocked=lambda:False,
+                credit_limit_blocked=lambda model=None:False,model_token_limit_blocked=lambda model=None:False)
             def pick_for_session(self,realm='cn',exclude=None,session_id=None,model=None):
                 return SimpleNamespace(uid='automatic',realm=realm)
         class Handler:

@@ -1,6 +1,7 @@
 """Fixed error taxonomy. Never returns or persists upstream free-form text."""
 import json
 import re
+from .workbuddy_gates import REASONS as ACCOUNT_REASONS
 
 CODES = {'11102':'model_not_found','11128':'channel_verification','11133':'parameters','6004':'quota_exhausted','429':'rate_limited'}
 TEXT_CODES = {'model_not_found':'model_not_found','model_alias_disabled':'alias_disabled','model_alias_conflict':'alias_conflict',
@@ -9,6 +10,7 @@ TEXT_CODES = {'model_not_found':'model_not_found','model_alias_disabled':'alias_
               'insufficient_quota':'quota_exhausted','rate_limit_exceeded':'rate_limited',
               'first_token_timeout':'first_token_timeout','stream_idle_timeout':'stream_timeout'}
 MESSAGES = {
+    'account_unavailable':('账号被本地可用性规则拦截','查看账号保留余额、每日用量上限、凭据刷新和冷却原因；这不表示官方模型服务宕机。'),
     'route_configuration':('路由配置存在循环','路由目标应使用真实平台模型，检查别名是否重新指向同一路由。'),
     'alias_disabled':('模型别名已暂停','在模型页启用此别名，或使用其实际目标模型 ID。'),
     'alias_conflict':('模型别名与真实模型冲突','在模型页删除旧别名或改用其他别名 ID，避免同名请求指向不同模型。'),
@@ -41,6 +43,9 @@ def classify_error(value, status=None):
             text=item[:16384];parts.append(text.lower())
             codes.extend(re.findall(r'["\\]*code["\\]*\s*[:=]\s*["\\]*(11102|11128|11133|6004)\b',text))
     walk(value)
+    for code in codes:
+        if code=='account_unavailable' or code in ACCOUNT_REASONS:
+            return {'error_category':'account_unavailable','upstream_code':code}
     for code in codes:
         if code in CODES: return {'error_category':CODES[code],'upstream_code':code}
     for code in codes:

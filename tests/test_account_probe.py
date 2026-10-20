@@ -94,6 +94,18 @@ class AccountProbe(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(r.json()['ok']);self.assertEqual(r.json()['status'],429)
         self.assertEqual(calls,['a'])
 
+    async def test_workbuddy_local_rejection_stays_pinned_and_names_attempt(self):
+        wb=self.app.state.api.workbuddy
+        wb.accounts=AsyncMock(return_value=[{'uid':x,'realm':'intl','enabled':True} for x in ('a','b')])
+        calls=[]
+        async def relay(row,*args):
+            calls.append(row['account_uid'])
+            raise HTTPException(503,{'code':'account_model_daily_limit','message':'该模型今日 Token 上限已达到'})
+        wb.connections.relay_row=relay
+        r=await self.probe(account_provider='workbuddy_intl',model='workbuddy/m')
+        self.assertFalse(r.json()['ok']);self.assertEqual(r.json()['status'],503)
+        self.assertFalse(r.json()['account_confirmed']);self.assertEqual(calls,['a'])
+
 
 class PythonPinning(unittest.IsolatedAsyncioTestCase):
     async def test_domestic_pool_respects_exact_pin_even_in_manual_mode(self):

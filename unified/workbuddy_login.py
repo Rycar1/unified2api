@@ -83,15 +83,20 @@ class WorkBuddyLogin:
                 and isinstance(a.get("uid"), str) and a["uid"]]
 
     async def public_accounts(self):
+        from .workbuddy_gates import public_gate,REASONS,midnight
         rows = []
         for account in await self.accounts():
             credits = account.get("credits")
             remaining = credits.get("remain") if isinstance(credits, dict) else None
             expiry = account.get("expiresAt")
+            gate=public_gate(account)
+            model_blocks={mid:{'code':'account_model_daily_limit','reason':REASONS['account_model_daily_limit'],'until':midnight()}
+                for mid in (account.get('modelDailyTokens') or {}) if public_gate(account,mid)=='account_model_daily_limit'}
             credit_summary=self.credit_policy.summarize(credits.get('packages',[]),credits.get('fetched_at',credits.get('updated_at',0))) if isinstance(credits,dict) and hasattr(self,'credit_policy') else {}
             rows.append({**credit_summary,"id": account["uid"], "uid": account["uid"], "provider": "workbuddy_intl",
                          "name": account.get("nickname") or account["uid"], "enabled": account.get("enabled", False),
-                         "status": "paused" if not account.get("enabled") else "cooling" if account.get("inCooldown") else "ready",
+                         "status": "paused" if not account.get("enabled") else "cooling" if account.get("inCooldown") or gate else "ready",
+                         "availability_reason":REASONS.get(gate),'availability_code':gate,'model_blocks':model_blocks,
                          "remaining": remaining if isinstance(remaining, (int, float)) else None,
                          "inflight": getattr(self,"active",{}).get(account["uid"],0),
                          "expires_at": expiry * 1000 if isinstance(expiry, (int, float)) and expiry < 100000000000 else expiry or 0,
@@ -103,14 +108,18 @@ class WorkBuddyLogin:
         return rows
 
     async def routing_accounts(self,model,excluded,limit=2,session=None):
+        from .workbuddy_gates import native_gate
         now=time.time()
         rows=await self.public_accounts()
         positions={r['id']:i for i,r in enumerate(rows)}
         ready=[r for r in rows if r['enabled'] and r['status']=='ready' and r['remaining']!=0
                and r['id'] not in excluded and r['model_cooldowns'].get(model,0)<=now
+               and model not in r.get('model_blocks',{})
                and self.active.get(r['id'],0)<limit]
         ready.sort(key=lambda r:(positions[r['id']]-self.route_cursor)%max(1,len(rows)))
         runtime=getattr(self,'runtime',None)
+        if runtime and runtime.proxy:
+            ready=[r for r in ready if not native_gate(runtime.proxy.POOL.get(r['id']),model)]
         warm=runtime.proxy.POOL.affinity.recent(session) if session and runtime and runtime.proxy else []
         def score(row):
             policy=getattr(self,'credit_policy',None)
@@ -118,6 +127,23 @@ class WorkBuddyLogin:
             return row.get('sunk_until',0)>now,warm.index(row['id']) if row['id'] in warm else len(warm),self.active.get(row['id'],0),preference
         ready.sort(key=score)
         return ready,positions
+
+    async def unavailable_reasons(self,model,excluded,limit=2):
+        from collections import Counter
+        from .workbuddy_gates import native_gate
+        now=time.time();reasons=Counter()
+        runtime=getattr(self,'runtime',None)
+        for row in await self.public_accounts():
+            if row['id'] in excluded:continue
+            reason=row.get('availability_code')
+            if not row['enabled']:reason='account_paused'
+            elif row['status']=='cooling' or row['model_cooldowns'].get(model,0)>now:reason=reason or 'account_cooling'
+            elif model in row.get('model_blocks',{}):reason=row['model_blocks'][model]['code']
+            elif row['remaining']==0:reason='account_no_balance'
+            elif self.active.get(row['id'],0)>=limit:reason='account_concurrency'
+            if not reason and runtime and runtime.proxy:reason=native_gate(runtime.proxy.POOL.get(row['id']),model)
+            if reason:reasons[reason]+=1
+        return reasons
 
     def record_route_limit(self,aid,model,balance=None):
         now=time.time();until=now+60
@@ -165,6 +191,8 @@ class WorkBuddyLogin:
         selected=requested_account('workbuddy')
         selected=selected or scope.get('state',{}).get('account_route_id')
         if selected:
+            from .diagnostics import note_requested_account
+            note_requested_account('workbuddy',selected)
             return await self.connections.relay_row({**row,'account_uid':selected},path,body,scope,receive,send)
         if trace and trace.smart:
             if not hasattr(self,"active"):

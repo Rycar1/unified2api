@@ -133,6 +133,7 @@ def availability(rows):
                    'status':row.get('status',row.get('pool_state','unknown')), 'enabled':row.get('enabled',True),
                    'available':row in ready, 'remaining':row.get('remaining'),
                    'model_cooldowns':row.get('model_cooldowns',{}),
+                   'model_blocks':row.get('model_blocks',{}),'reason':row.get('availability_reason'),
                    'sunk_until':row.get('sunk_until',0),'cooldown_until':row.get('cooldown_until',0),
                    'active':row.get('inflight',row.get('in_flight',0))} for row in rows]
     return {'available':bool(ready),'accounts':len(ready),'active':sum(row.get('inflight',row.get('in_flight',0)) for row in ready),
@@ -149,7 +150,10 @@ def model_inventory(snapshot,target,now=None):
     for candidate in source['candidates']:
         row=dict(candidate)
         deadline=(row.get('model_cooldowns') or {}).get(model,0)
-        if deadline>now and row.get('status') not in {'paused','invalid','expired','exhausted'}:
+        block=(row.get('model_blocks') or {}).get(model)
+        if block and block.get('until',0)>now and row.get('status') not in {'paused','invalid','expired','exhausted'}:
+            row.update(available=False,status='cooling',reason=block['reason'],cooldown_until=block['until'])
+        elif deadline>now and row.get('status') not in {'paused','invalid','expired','exhausted'}:
             row.update(available=False,status='cooling',cooldown_until=max(deadline,row.get('cooldown_until') or 0),reason='此模型受到上游限流')
         elif row.get('available') and row.get('sunk_until',0)>now:
             row['reason']='暂时降低优先级，仍可参与分配'

@@ -261,6 +261,15 @@ class Connections(CustomPool):
                                     {"x-wb-site": "intl"} if row.get("kind") == "workbuddy_intl" else {})}) as response:
                     if response.status_code >= 300:
                         detail = await _bounded_body(response)
+                        if row.get('adapter')=='hub' and row.get('account_uid'):
+                            from .workbuddy_gates import REASONS
+                            from .diagnostics import note_requested_account,note_account
+                            note_requested_account('workbuddy',row['account_uid'])
+                            actual=response.headers.get('X-Unified-Account')
+                            if actual:note_account('workbuddy',actual)
+                            reason=response.headers.get('X-Unified-Account-Rejection')
+                            if response.status_code==503 and reason in REASONS:
+                                raise HTTPException(503,{'code':reason,'message':REASONS[reason]})
                         from .diagnostics import CURRENT_TRACE
                         trace = CURRENT_TRACE.get()
                         if trace and trace.current_response:

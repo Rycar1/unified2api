@@ -18,12 +18,17 @@ ATTEMPT_FIELDS = {'kind','model','provider','account_id','account_name','status'
                   'error_category','upstream_code'}
 
 
+def note_requested_account(provider,account_id,name=''):
+    """Record the attempted binding without claiming upstream accepted it."""
+    trace=CURRENT_TRACE.get()
+    if trace and trace.attempts:
+        trace.attempts[-1].update(provider=provider,account_id=str(account_id)[:80],account_name=str(name)[:60])
+
+
 def note_account(provider, account_id, name=''):
     from .account_target import confirm_account
     confirm_account(provider,account_id)
-    trace = CURRENT_TRACE.get()
-    if trace and trace.attempts:
-        trace.attempts[-1].update(provider=provider,account_id=str(account_id)[:80],account_name=str(name)[:60])
+    note_requested_account(provider,account_id,name)
 
 
 class ResponseObservation:

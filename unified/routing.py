@@ -102,7 +102,8 @@ async def dispatch(api,provider,scope,receive,send,body):
 
 async def workbuddy_dispatch(api,scope,receive,send,body):
     from .account_retry import hold_rate_limit,emit_events
-    wb=api.workbuddy;tried=set();last=None;last_error=None
+    from .workbuddy_gates import REASONS
+    wb=api.workbuddy;tried=set();last=None;last_error=None;rejected=Counter()
     state=scope.setdefault('state',{});payload=json.loads(body);model=payload.get('model','')
     metadata=payload.get('metadata') if isinstance(payload.get('metadata'),dict) else {}
     session=payload.get('conversation_id') or payload.get('session_id') or metadata.get('conversation_id')
@@ -114,6 +115,10 @@ async def workbuddy_dispatch(api,scope,receive,send,body):
             if not ready:
                 if last is not None:return await emit_events(last,send)
                 if last_error:raise last_error
+                rejected.update(await wb.unavailable_reasons(model,tried,limit))
+                if rejected:
+                    raise HTTPException(503,{'code':'account_unavailable','reasons':dict(rejected),
+                        'message':'WorkBuddy 候选账号暂不可用：'+'；'.join(f'{REASONS[code]}（{count} 个）' for code,count in rejected.items())})
                 raise HTTPException(503,'WorkBuddy 此模型暂无可用账号：请查看路由计划中的冷却、额度和并发状态')
             account=ready[0];aid=account['id'];tried.add(aid)
             wb.route_cursor=positions[aid]+1
@@ -131,6 +136,11 @@ async def workbuddy_dispatch(api,scope,receive,send,body):
                     return
                 last=held
             except HTTPException as exc:
+                code=exc.detail.get('code') if isinstance(exc.detail,dict) else None
+                if exc.status_code==503 and code in REASONS and not getattr(exc,'account_response_started',False):
+                    rejected[code]+=1
+                    api.inventory_cache=None
+                    continue
                 if exc.status_code!=429 or getattr(exc,'account_response_started',False):raise
                 last_error=exc
             finally:
